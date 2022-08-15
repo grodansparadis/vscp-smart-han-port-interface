@@ -2,5 +2,16 @@
   "idf.adapterTargetName": "esp32c3",
   "idf.openOcdConfigs": [
     "board/esp32c3-builtin.cfg"
-  ]
+  ],
+  "files.associations": {
+    "*.tcc": "c",
+    "ratio": "c",
+    "system_error": "c",
+    "array": "c",
+    "functional": "c",
+    "regex": "c",
+    "tuple": "c",
+    "type_traits": "c",
+    "utility": "c"
+  }
 }
