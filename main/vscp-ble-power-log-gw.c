@@ -700,14 +700,14 @@ void app_main(void)
   ESP_LOGI(TAG, "Create timer handle");
   gptimer_handle_t gptimer = NULL;
   gptimer_config_t timer_config = {
-      .clk_src = GPTIMER_CLK_SRC_DEFAULT,
-      .direction = GPTIMER_COUNT_UP,
-      .resolution_hz = 1000000, // 1MHz, 1 tick=1us
+    .clk_src = GPTIMER_CLK_SRC_DEFAULT,
+    .direction = GPTIMER_COUNT_UP,
+    .resolution_hz = 1000000, // 1MHz, 1 tick=1us
   };
   ESP_ERROR_CHECK(gptimer_new_timer(&timer_config, &gptimer));
 
   gptimer_event_callbacks_t cbs = {
-      .on_alarm = main_timer_on_alarm_cb,
+    .on_alarm = main_timer_on_alarm_cb,
   };
   ESP_ERROR_CHECK(gptimer_register_event_callbacks(gptimer, &cbs, queue));
 
@@ -716,7 +716,10 @@ void app_main(void)
 
   ESP_LOGI(TAG, "Install temperature sensor, expected temp ranger range: 10~50 ℃");
   temperature_sensor_handle_t temp_sensor = NULL;
+
   /*
+    Temperature ranges
+    ------------------
      50 ~ 125 < 3
      20 ~ 100 < 2
     -10 ~ 80 < 1
