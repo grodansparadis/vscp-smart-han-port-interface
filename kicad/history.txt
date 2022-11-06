@@ -1,5 +1,8 @@
 HISTORY
 -------
+221106 - Rerouted USB tracks to be a nices differential pair.
+221106 - Moved H1 hole to fit better in box.
+221106 - Added R10 to be able to bypass Q1 if needed.
 220925 - Added connector and resistor for BUS_OFF LED connector.
 220923 - Changed Diod connecter ro common catode
 220923 - Populated J7 (IO3/IO4/IO5/RX/TX)
