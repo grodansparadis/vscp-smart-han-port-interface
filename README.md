@@ -1,6 +1,6 @@
-# vscp-ble-power-log-gateway
+# vscp-smart-han-port-interface
 
-BLE unit to log P1 data from power meters
+BLE/WiFi unit to log P1 data from power meters
 
 Still at prototype stage. 
 
