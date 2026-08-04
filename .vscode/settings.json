@@ -13,5 +13,6 @@
     "tuple": "c",
     "type_traits": "c",
     "utility": "c"
-  }
+  },
+  "idf.port": "/dev/ttyACM0"
 }

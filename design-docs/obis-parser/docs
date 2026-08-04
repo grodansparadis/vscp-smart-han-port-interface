@@ -1,0 +1,38 @@
+## Implementation Notes
+
+Since you'll likely be feeding this from a UART on an STM32, here are the key design points:
+
+- **No malloc, fixed buffers only** — sizes are all `#define`d in the header, easy to tune per-target.
+- **Two layers**:
+  - `p1_parse_line()` works on a single line at a time (handy if you're streaming from a UART byte-by-byte and assembling lines yourself).
+  - `p1_parse_telegram()` handles a whole buffered telegram, including CRC verification.
+- **CRC16/ARC** (poly `0xA001`, init `0`) is what DSMR/P1 actually uses — verified against a real computed checksum, not a guessed one.
+- Handles the gas-meter case where one OBIS line has two parenthesized groups (timestamp + reading) via `values[]` / `value_count`.
+- `p1_obis_describe()` gives a human-readable label for common DSMR codes and normalizes away the trailing `.255` channel suffix.
+
+> **Note:** If your telegrams don't follow the Dutch DSMR spec specifically (different meter, different OBIS set, or you're pulling from DLMS/COSEM binary rather than ASCII P1), the value decoding or lookup table may need adjusting.
+
+
+-------
+
+
+OBIS codes (from DLMS/COSEM, used in smart meters) look like 1-0:1.8.0.255 — group A-B:C.D.E.F. A parser typically needs to split that string and map the C/D/E fields to meaningful quantities (energy, voltage, etc.).
+
+A couple of things would help me build the right thing for you:
+
+Now let's build and run it to confirm everything actually works end to end:
+
+It compiles clean with -Wall -Wextra -Wpedantic and parses correctly, including multi-value lines (the gas meter's timestamp + reading) and CRC verification. Let me quickly confirm the CRC check actually catches corruption too, then hand you the files.
+
+Correctly rejects a bad CRC (P1_ERR_CRC_MISMATCH = 3). Cleaning up the test files and delivering:
+
+Notes on the design, since you'll likely be feeding this from a UART on an STM32:
+
+- No malloc, fixed buffers only — sizes are all #defined in the header, easy to tune per-target.
+- Two layers: p1_parse_line() works on a single line at a time (handy if you're streaming from a UART byte-by-byte and assembling lines yourself), and p1_parse_telegram() handles a whole buffered telegram including CRC verification.
+- CRC16/ARC (poly 0xA001, init 0) is what DSMR/P1 actually uses — verified against a real computed checksum, not a guessed one.
+- Handles the gas-meter case where one OBIS line has two parenthesized groups (timestamp + reading) via values[]/value_count.
+- p1_obis_describe() gives you a human-readable label for common DSMR codes and normalizes away the trailing .255 channel suffix.
+
+If your telegrams don't follow the Dutch DSMR spec specifically (different meter, different OBIS set, or you're pulling from DLMS/COSEM binary rather than ASCII P1), let me know and I can adjust the value decoding or table.
+
