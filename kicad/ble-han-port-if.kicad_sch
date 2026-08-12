@@ -3242,7 +3242,7 @@
 		)
 		(uuid "531029d1-0bf7-42d4-99f9-664d87050ede")
 	)
-	(text "Reservoar Capacitor\n(mount if needed)"
+	(text "Reservoar Capacitor\n100 µF to 220 µF\n(mount if needed)"
 		(exclude_from_sim no)
 		(at 257.81 95.25 0)
 		(effects

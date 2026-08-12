@@ -51,7 +51,8 @@ Module.symvers
 Mkfile.old
 dkms.conf
 build
-
+kicad/ble-han-port-if-backups
 
 #Ignore vscode AI rules
 .github/instructions/codacy.instructions.md
+
