@@ -46,6 +46,7 @@
 #include <vscp-crc.h>
 
 #include <vscp-binary.h>
+#include <esp_random.h>
 #include "vscp-ws1.h"
 
 #define TAG __func__
@@ -138,6 +139,21 @@ vscp_ws1_get_decrypted_binary_frame_len(const uint8_t *buf, size_t max_len)
   return 0;
 }
 
+//
+// Append str to the null terminated string in buf (total size bufsize) without
+// overflowing it. Output that does not fit is truncated.
+//
+
+static void
+vscp_ws1_append(char *buf, size_t bufsize, const char *str)
+{
+  size_t len = strnlen(buf, bufsize);
+  if (len + 1 >= bufsize) {
+    return;
+  }
+  snprintf(buf + len, bufsize - len, "%s", str);
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 // vscp_ws1_init
 //
@@ -225,11 +241,13 @@ vscp_ws1_clearup(vscp_ws_connection_context_t *pctx, void *pdata)
 int
 vscp_ws1_generate_sid(vscp_ws_connection_context_t *pctx, uint8_t *sid, size_t size)
 {
-  // Generate a random SID (session ID) for authentication and encryption
-  // In a real implementation, this should be done using a secure random generator
-  for (size_t i = 0; i < size; i++) {
-    sid[i] = rand() % 256;
+  if (NULL == sid) {
+    return VSCP_ERROR_INVALID_POINTER;
   }
+
+  // Hardware random number generator. A predictable session id (rand())
+  // would let an attacker precompute a valid AUTH reply.
+  esp_fill_random(sid, size);
   return VSCP_ERROR_SUCCESS;
 }
 
@@ -359,7 +377,15 @@ vscp_ws1_handle_binary_protocol_request(vscp_ws_connection_context_t *pctx, cons
   size_t frame_len = len;
 
   if (pframe[0] & 0x0f) {
-    // Encrypted frame: low nibble of byte 0 selects algorithm; trailing 16 bytes are the IV
+    // Encrypted frame: low nibble of byte 0 selects algorithm; trailing 16 bytes are the IV.
+    // It must hold the type byte, whole AES blocks and the IV, otherwise len - 16
+    // below underflows and decryption runs far past pbuf.
+    if ((len < (1 + 16 + 16)) || (0 != ((len - 1 - 16) % 16))) {
+      free(pbuf);
+      ESP_LOGE(TAG, "Invalid encrypted binary frame length %zu", len);
+      return VSCP_ERROR_INVALID_FRAME;
+    }
+
     if (VSCP_ERROR_SUCCESS !=
         (rv = vscp_fwhlp_decryptFrame(
            pbuf,
@@ -492,6 +518,22 @@ vscp_ws1_handle_command(const char *pCommand, const char *parg, vscp_ws_connecti
     *c = (char) toupper((unsigned char) *c);
   }
 
+  // These commands need an authenticated client
+  if (!pctx->bAuthenticated &&
+      ((0 == strcmp(command_buf, "OPEN")) || (0 == strcmp(command_buf, "SETFILTER")) ||
+       (0 == strcmp(command_buf, "SF")) || (0 == strcmp(command_buf, "CLRQUEUE")) ||
+       (0 == strcmp(command_buf, "CLRQ")))) {
+    ESP_LOGE(TAG, "%s refused, client is not authenticated", command_buf);
+    snprintf(buf,
+             sizeof(buf),
+             "-;%.32s;%d,%s",
+             command_buf,
+             VSCP_WS1_ERROR_NOT_AUTHORIZED,
+             VSCP_WS1_STR_ERROR_NOT_AUTHORISED);
+    vscp_ws1_callback_reply(pctx, buf);
+    return VSCP_ERROR_INVALID_PERMISSION;
+  }
+
   if (strcmp(command_buf, "NOOP") == 0) {
     vscp_ws1_callback_reply(pctx, "+;NOOP"); // Send positive reply
   }
@@ -518,6 +560,11 @@ vscp_ws1_handle_command(const char *pCommand, const char *parg, vscp_ws_connecti
     size_t sid_hex_len;
     size_t crypto_hex_len;
     size_t crypto_bin_len;
+
+    // A new AUTH always drops a previous login
+    pctx->bAuthenticated = false;
+    pctx->bOpen          = false;
+    memset(&pctx->user, 0, sizeof(pctx->user));
 
     if ((NULL == parg) || ('\0' == *parg)) {
       ESP_LOGE(TAG, "AUTH missing arguments");
@@ -572,6 +619,14 @@ vscp_ws1_handle_command(const char *pCommand, const char *parg, vscp_ws_connecti
       return VSCP_ERROR_INVALID_FORMAT;
     }
 
+    // The sid must be the challenge sent to this connection, otherwise a login
+    // captured on another connection could be replayed
+    if (0 != memcmp(sid, pctx->sid, VSCP_WS1_SID_SIZE)) {
+      ESP_LOGE(TAG, "AUTH SID does not match the session challenge");
+      vscp_ws1_callback_reply(pctx, "-;AUTH;8,Not authorized");
+      return VSCP_ERROR_INVALID_PERMISSION;
+    }
+
     if (16 != (crypto_bin_len = vscp_fwhlp_hex2bin(crypto + 1, sizeof(crypto) - 1, crypto_hex))) {
       ESP_LOGE(TAG, "Failed to convert AUTH crypto from hex %d", crypto_bin_len);
       vscp_ws1_callback_reply(pctx, "-;AUTH;8,Not authorized");
@@ -593,25 +648,25 @@ vscp_ws1_handle_command(const char *pCommand, const char *parg, vscp_ws_connecti
     // Send positive reply
     char wrkbuf[80] = { 0 };
     strcpy(buf, "+;AUTH;");
-    strcat(buf, pctx->user.username);
-    strcat(buf, ";;");
+    vscp_ws1_append(buf, sizeof(buf), pctx->user.username);
+    vscp_ws1_append(buf, sizeof(buf), ";;");
 #ifndef VSCP_WS1_DISABLE_USER_FULL_NAME
-    strcat(buf, pctx->user.fullname);
+    vscp_ws1_append(buf, sizeof(buf), pctx->user.fullname);
 #endif
     // Filter
-    strcat(buf, ";");
+    vscp_ws1_append(buf, sizeof(buf), ";");
     vscp_fwhlp_writeFilterToString(wrkbuf, sizeof(wrkbuf), &pctx->filter);
-    strcat(buf, wrkbuf);
+    vscp_ws1_append(buf, sizeof(buf), wrkbuf);
     // Mask
-    strcat(buf, ";");
+    vscp_ws1_append(buf, sizeof(buf), ";");
     vscp_fwhlp_writeMaskToString(wrkbuf, sizeof(wrkbuf), &pctx->filter);
-    strcat(buf, wrkbuf);
+    vscp_ws1_append(buf, sizeof(buf), wrkbuf);
     // Rights
-    strcat(buf, ";");
+    vscp_ws1_append(buf, sizeof(buf), ";");
     sprintf(wrkbuf, "%llu", pctx->user.rights);
-    strcat(buf, wrkbuf);
+    vscp_ws1_append(buf, sizeof(buf), wrkbuf);
     // Remotes (allowed remote IP addresses)
-    strcat(buf, ";");
+    vscp_ws1_append(buf, sizeof(buf), ";");
     for (int i = 0; i < 16; i++) {
       // Check for end of list (all zeros)
       bool is_zero = true;
@@ -625,7 +680,7 @@ vscp_ws1_handle_command(const char *pCommand, const char *parg, vscp_ws_connecti
         break;
       }
       if (i > 0) {
-        strcat(buf, ",");
+        vscp_ws1_append(buf, sizeof(buf), ",");
       }
       // Check if IPv4 (first 10 bytes zero, bytes 10-11 are 0xFF or first 12 bytes zero)
       bool is_ipv4 = true;
@@ -666,25 +721,25 @@ vscp_ws1_handle_command(const char *pCommand, const char *parg, vscp_ws_connecti
                 pctx->user.allowed_remotes[i][14],
                 pctx->user.allowed_remotes[i][15]);
       }
-      strcat(buf, wrkbuf);
+      vscp_ws1_append(buf, sizeof(buf), wrkbuf);
     }
     // Events
-    strcat(buf, ";");
+    vscp_ws1_append(buf, sizeof(buf), ";");
     for (int i = 0; i < 16; i++) {
       // Are we done
-      if (pctx->user.events[i][0] && pctx->user.events[i][1]) {
+      if ((0 == pctx->user.events[i][0]) && (0 == pctx->user.events[i][1])) {
         break;
       }
       if (i > 0) {
-        strcat(buf, ",");
+        vscp_ws1_append(buf, sizeof(buf), ",");
       }
       sprintf(wrkbuf, "%02X:%02X", pctx->user.events[i][0], pctx->user.events[i][1]);
-      strcat(buf, wrkbuf);
+      vscp_ws1_append(buf, sizeof(buf), wrkbuf);
     }
     // Note
-    strcat(buf, ";");
+    vscp_ws1_append(buf, sizeof(buf), ";");
 #ifndef VSCP_WS1_DISABLE_USER_NOTES
-    strcat(buf, pctx->user.note);
+    vscp_ws1_append(buf, sizeof(buf), pctx->user.note);
 #endif
 
     ESP_LOGI(TAG, "Authentication successful, sending reply: %s", buf);
@@ -779,6 +834,8 @@ vscp_ws1_handle_command(const char *pCommand, const char *parg, vscp_ws_connecti
       return VSCP_ERROR_INVALID_SYNTAX;
     }
 
+    // Store the filter for this connection; the callback may also persist it
+    memcpy(&pctx->filter, &filter, sizeof(filter));
     if (VSCP_ERROR_SUCCESS != (rv = vscp_ws1_callback_setfilter(pctx, &filter))) {
       sprintf(buf, "-;SETFILTER;%d,%s", VSCP_WS1_ERROR_GENERAL, VSCP_WS1_STR_ERROR_GENERAL);
       if (VSCP_ERROR_SUCCESS != (rv = vscp_ws1_callback_reply(pctx, buf))) {
@@ -812,7 +869,7 @@ vscp_ws1_handle_command(const char *pCommand, const char *parg, vscp_ws_connecti
   }
   else {
     ESP_LOGE(TAG, "Unknown command: %s", pCommand);
-    sprintf(buf, "-;%s;%d,%s", pCommand, VSCP_WS1_ERROR_UNKNOWN_COMMAND, VSCP_WS1_STR_ERROR_UNKNOWN_COMMAND);
+    snprintf(buf, sizeof(buf), "-;%.32s;%d,%s", pCommand, VSCP_WS1_ERROR_UNKNOWN_COMMAND, VSCP_WS1_STR_ERROR_UNKNOWN_COMMAND);
     if (VSCP_ERROR_SUCCESS != (rv = vscp_ws1_callback_reply(pctx, buf))) {
       ESP_LOGE(TAG, "Failed to send UNKNOWN_COMMAND reply rv=%d", rv);
       return rv;

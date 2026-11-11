@@ -344,6 +344,12 @@ send_event(void *arg)
     return;
   }
 
+  // ws1: only authenticated clients with an open channel get events that pass their filter
+  if (!pctx->bAuthenticated || !pctx->bOpen || !vscp_fwhlp_doLevel2FilterEx(&resp_arg->ex, &pctx->filter)) {
+    free(resp_arg);
+    return;
+  }
+
   ESP_LOGI(TAG,
            "send_event: Sending to fd=%d protocol=%d binary=%d enc=%d",
            fd,

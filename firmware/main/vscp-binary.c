@@ -35,6 +35,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <ctype.h>
+#include <stdbool.h>
 
 #include "vscp-compiler.h"
 #include "vscp-projdefs.h"
@@ -42,9 +43,40 @@
 #include <vscp.h>
 #include <vscp-firmware-helper.h>
 
+#include "main.h" // secure_zero
 #include "vscp-binary.h"
 
 #define VSCP_ERROR_UNKNOWN_COMMAND 72 /* This command is not available */
+
+// Commands that are allowed before the client has logged in
+static bool
+vscp_binary_is_public_command(uint16_t command)
+{
+  switch (command) {
+    case VSCP_BINARY_COMMAND_CODE_NOOP:
+    case VSCP_BINARY_COMMAND_CODE_QUIT:
+    case VSCP_BINARY_COMMAND_CODE_USER:
+    case VSCP_BINARY_COMMAND_CODE_PASS:
+    case VSCP_BINARY_COMMAND_CODE_CHALLENGE:
+    case VSCP_BINARY_COMMAND_CODE_VERSION:
+      return true;
+    default:
+      return false;
+  }
+}
+
+// Copy a command argument to a null terminated string. The argument is not
+// null terminated within len in the frame.
+static void
+vscp_binary_arg_to_str(char *str, size_t size, const uint8_t *parg, size_t len)
+{
+  size_t n = 0;
+  if (NULL != parg) {
+    n = (len < size - 1) ? len : size - 1;
+    memcpy(str, parg, n);
+  }
+  str[n] = '\0';
+}
 
 ///////////////////////////////////////////////////////////////////////////////
 // vscp_handle_binary_command
@@ -55,6 +87,11 @@ vscp_handle_binary_command(const void *pdata, uint16_t command, const uint8_t *p
 {
   int rv;
 
+  if (!vscp_binary_is_public_command(command) &&
+      (VSCP_ERROR_SUCCESS != vscp_binary_callback_check_authenticated(pdata))) {
+    return vscp_binary_callback_reply(pdata, command, VSCP_ERROR_INVALID_PERMISSION, NULL, 0);
+  }
+
   if (VSCP_BINARY_COMMAND_CODE_NOOP == command) {
     // No operation, just reply with success
     return vscp_binary_callback_reply(pdata, command, VSCP_ERROR_SUCCESS, NULL, 0);
@@ -64,11 +101,16 @@ vscp_handle_binary_command(const void *pdata, uint16_t command, const uint8_t *p
     return vscp_binary_callback_quit(pdata);
   }
   else if (VSCP_BINARY_COMMAND_CODE_USER == command) {
-    rv = vscp_binary_callback_user(pdata, (const char *) parg);
+    char user[VSCP_BINARY_MAX_USERNAME_LENGTH + 1];
+    vscp_binary_arg_to_str(user, sizeof(user), parg, len);
+    rv = vscp_binary_callback_user(pdata, user);
     return vscp_binary_callback_reply(pdata, command, rv, NULL, 0);
   }
   else if (VSCP_BINARY_COMMAND_CODE_PASS == command) {
-    rv = vscp_binary_callback_password(pdata, (const char *) parg);
+    char password[VSCP_BINARY_MAX_PASSWORD_LENGTH + 1];
+    vscp_binary_arg_to_str(password, sizeof(password), parg, len);
+    rv = vscp_binary_callback_password(pdata, password);
+    secure_zero(password, sizeof(password));
     vscp_binary_callback_reply(pdata, command, rv, NULL, 0);
   }
   else if (VSCP_BINARY_COMMAND_CODE_CHALLENGE == command) {
@@ -469,7 +511,13 @@ vscp_handle_binary_event(const void *pdata, vscp_event_t *pEvent)
     return VSCP_ERROR_PARAMETER;
   }
 
-  rv = vscp_binary_callback_send_event(pdata, pEvent);
+  // Only logged in clients may send events
+  if (VSCP_ERROR_SUCCESS != vscp_binary_callback_check_authenticated(pdata)) {
+    rv = VSCP_ERROR_INVALID_PERMISSION;
+  }
+  else {
+    rv = vscp_binary_callback_send_event(pdata, pEvent);
+  }
 
   // Event is deleted in caller routine
 
