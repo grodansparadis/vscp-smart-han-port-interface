@@ -180,8 +180,6 @@ vscp_ws1_callback_validate_user(vscp_ws_connection_context_t *pctx,
     return rv;
   }
 
-  ESP_LOGD(TAG, "Decrypted credentials: %s", encbuf + 1);
-
   // The decrypted credentials should be in the format "username:password"
   char *p = strchr((char *) encbuf + 1, ':');
   if (NULL == p) {
@@ -190,8 +188,7 @@ vscp_ws1_callback_validate_user(vscp_ws_connection_context_t *pctx,
   }
 
   char *username = (char *) encbuf + 1;
-  *p++           = '\0'; // Null-terminate username
-  char *password = p;    // Null terminated password starts after the colon
+  *p             = '\0'; // Null-terminate username, password follows the colon
 
   ESP_LOGV(TAG, "Decrypted credentials - Username: %s", username);
 

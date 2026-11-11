@@ -1114,7 +1114,6 @@ validate_user(const char *user, const char *pw)
       return false;
   }
 
-  ESP_LOGI(TAG, "Credentials: %s=%s - %s=%s", username, user, password, pw);
   if (0 == strcmp(username, user) && 0 == strcmp(password, pw)) {
     return true;
   }
