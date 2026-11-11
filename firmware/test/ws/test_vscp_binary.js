@@ -194,12 +194,10 @@ function encryptBinaryFrame(frame, keyHex, encryption = VSCP_ENCRYPTION_AES128) 
   const key = Buffer.from(keyHex, 'hex');
   const iv = crypto.randomBytes(16);
   const payload = frame.subarray(1);
-  const padLen = 16 - (payload.length % 16);
-  const paddedPayload = Buffer.concat([payload, Buffer.alloc(padLen, 0x00)]);
 
+  // PKCS#7 padding (Node default), required by vscp_fwhlp_decryptFrame
   const cipher = crypto.createCipheriv('aes-128-cbc', key, iv);
-  cipher.setAutoPadding(false);
-  const ciphertext = Buffer.concat([cipher.update(paddedPayload), cipher.final()]);
+  const ciphertext = Buffer.concat([cipher.update(payload), cipher.final()]);
 
   return Buffer.concat([
     Buffer.from([(frame[0] & 0xf0) | (encryption & 0x0f)]),

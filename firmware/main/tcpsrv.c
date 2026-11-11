@@ -74,10 +74,10 @@
 
 // Global stuff
 extern transport_t tr_tcpsrv[MAX_TCP_CONNECTIONS];
+extern node_persistent_config_t g_persistent;
 
 static const char *TAG = "tcpsrv";
 
-static uint8_t cntClients = 0; // Holds current number of clients
 
 /**
   Received event are written to this fifo
@@ -95,18 +95,16 @@ static ctx_t ctx[MAX_TCP_CONNECTIONS]; // Socket context
 void
 setContextDefaults(ctx_t *pctx)
 {
-  pctx->bValidated        = 0;
-  pctx->privLevel         = 0;
-  pctx->bRcvLoop          = 0;
-  pctx->size              = 0;
-  pctx->last_rcvloop_time = esp_timer_get_time();
-  // vscp_fifo_clear(&pctx->fifoEventsOut);
-  memset(pctx->buf, 0, TCPIP_BUF_MAX_SIZE);
-  memset(pctx->user, 0, VSCP_LINK_MAX_USER_NAME_LENGTH);
-  // Filter: All events received
-  memset(&pctx->filter, 0, sizeof(vscpEventFilter));
-  memset(&pctx->statistics, 0, sizeof(vscp_statistics_t));
-  memset(&pctx->status, 0, sizeof(vscp_status_t));
+  int id = pctx->link.id;
+
+  memset(pctx, 0, sizeof(ctx_t));
+  pctx->link.id                = id;
+  pctx->link.ops               = &g_link_ops;
+  pctx->link.user_data         = pctx;
+  pctx->link.sock              = 0;
+  pctx->link.last_rcvloop_time = (uint32_t) (esp_timer_get_time() / 1000); // Milliseconds
+  memcpy(pctx->link.guid, g_persistent.guid, 16);
+  // Filter: All events received (all zero)
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -153,159 +151,103 @@ static void
 client_task(void *pvParameters)
 {
   int rv;
-  size_t len;
-  ctx_t ctx;
   char rxbuf[128];
 
-  // Set default
-  // setContextDefaults(&ctx);
-  ctx.bValidated        = 0;
-  ctx.privLevel         = 0;
-  ctx.bRcvLoop          = 0;
-  ctx.size              = 0;
-  ctx.last_rcvloop_time = esp_timer_get_time();
-  memset(ctx.buf, 0, TCPIP_BUF_MAX_SIZE);
-  memset(ctx.user, 0, VSCP_LINK_MAX_USER_NAME_LENGTH);
-  // Filter: All events received
-  memset(&ctx.filter, 0, sizeof(vscpEventFilter));
-  memset(&ctx.statistics, 0, sizeof(vscp_statistics_t));
-  memset(&ctx.status, 0, sizeof(vscp_status_t));
-
-  // int sock = (int)*((int *)pvParameters);
-  ctx.sock = *((int *) pvParameters);
-  ctx.id   = cntClients++;
+  // The accept loop hands us a claimed slot with the socket filled in
+  ctx_t *pctx = (ctx_t *) pvParameters;
+  int id      = pctx->link.id;
 
   // Mark transport channel as open
-  tr_tcpsrv[ctx.id].open = true;
+  tr_tcpsrv[id].open = true;
 
-  ESP_LOGI(TAG, "Client worker socket=%d id=%d", ctx.sock, ctx.id);
+  ESP_LOGI(TAG, "Client worker socket=%d id=%d", pctx->link.sock, id);
+
+  // Wait no more than 500 milliseconds for input so the idle worker can run
+  struct timeval tv;
+  tv.tv_sec  = 0;
+  tv.tv_usec = 500000;
+  setsockopt(pctx->link.sock, SOL_SOCKET, SO_RCVTIMEO, (const char *) &tv, sizeof tv);
 
   // Greet client
-  send(ctx.sock, TCPSRV_WELCOME_MSG, sizeof(TCPSRV_WELCOME_MSG), 0);
+  vscp_link_connect(&pctx->link);
 
-  while (1) {
-
-    // input data from socket but wait no more than 500 milliseconds
-    struct timeval tv;
-    tv.tv_sec  = 0;
-    tv.tv_usec = 500000; // 500 milliseconds
-    setsockopt(ctx.sock, SOL_SOCKET, SO_RCVTIMEO, (const char *) &tv, sizeof tv);
+  while (pctx->link.sock) {
 
     // Read command from client
-    memset(rxbuf, 0, sizeof(rxbuf));
-    len = (rv = recv(ctx.sock, rxbuf, sizeof(rxbuf) - 1, 0));
+    rv = recv(pctx->link.sock, rxbuf, sizeof(rxbuf), 0);
     if (rv < 0) {
-
-      if (errno == EAGAIN) {
-        vscp_link_idle_worker(&ctx); // Handle rcvloop etc
+      if ((EAGAIN == errno) || (EWOULDBLOCK == errno)) {
+        vscp_link_idle_worker(&pctx->link); // Handle rcvloop etc
         continue;
       }
-
-      // Timeout
       ESP_LOGE(TAG, "Error occurred during receiving: errno %d", errno);
       break;
     }
-    else if (len == 0) {
+    else if (0 == rv) {
       ESP_LOGI(TAG, "Connection closed");
       break;
     }
-    else {
 
-      // Append to command buffer with strict bounds
-      size_t used      = strnlen(ctx.buf, sizeof(ctx.buf));
-      size_t remaining = sizeof(ctx.buf) - used - 1; // keep room for terminator
-      size_t copy_len  = MIN((size_t) len, remaining);
+    // Append to the command buffer and handle every complete line in it
+    for (int i = 0; (i < rv) && pctx->link.sock; i++) {
+      char c = rxbuf[i];
 
-      if (copy_len < (size_t) len) {
-        ESP_LOGW(TAG,
-                 "Input command buffer full, truncating incoming data (%u -> %u)",
-                 (unsigned) len,
-                 (unsigned) copy_len);
-      }
-
-      if (copy_len > 0) {
-        memcpy(ctx.buf + used, rxbuf, copy_len);
-        ctx.buf[used + copy_len] = '\0';
-      }
-      ctx.size = used + copy_len;
-
-      ESP_LOGI(TAG, "Received %d bytes: %s", len, rxbuf);
-
-      // Parse all complete VSCP commands currently available in the context buffer
-      while (ctx.size > 0) {
-
-        char *p = NULL;
-        int parser_rv = vscp_link_parser(&ctx, ctx.buf, &p);
-
-        if (VSCP_ERROR_MISSING == parser_rv) {
-          break; // incomplete command, wait for more data
+      if (pctx->bDiscard) {
+        // Skip until the end of the over-long line
+        if ('\n' == c) {
+          pctx->bDiscard = false;
         }
+        continue;
+      }
 
+      if ('\n' == c) {
+        // Strip a trailing CR and pass the line (null terminated) to the parser
+        if ((pctx->size > 0) && ('\r' == pctx->buf[pctx->size - 1])) {
+          pctx->size--;
+        }
+        pctx->buf[pctx->size] = '\0';
+
+        int parser_rv = vscp_link_parser(&pctx->link, pctx->buf);
         if (VSCP_ERROR_SUCCESS != parser_rv) {
-          ESP_LOGW(TAG, "VSCP parser returned error=%d", parser_rv);
+          ESP_LOGD(TAG, "VSCP parser returned %d", parser_rv);
         }
-
-        if (!ctx.sock) {
-          break;
-        }
-
-        if ((NULL == p) || (p < ctx.buf) || (p > (ctx.buf + ctx.size))) {
-          ESP_LOGW(TAG, "Invalid parser next pointer, resetting command buffer");
-          ctx.buf[0] = '\0';
-          ctx.size   = 0;
-          break;
-        }
-
-        size_t consumed = (size_t) (p - ctx.buf);
-        size_t left     = ctx.size - consumed;
-        memmove(ctx.buf, p, left);
-        ctx.buf[left] = '\0';
-        ctx.size      = left;
+        pctx->size = 0;
       }
-
-      // If socket gets closed ("quit" command)
-      // pctx->sock is zero
-      if (!ctx.sock) {
-        break;
+      else if (pctx->size < (sizeof(pctx->buf) - 1)) {
+        pctx->buf[pctx->size++] = c;
       }
-
-      // Get event from input fifo
-      // vscp_event_t *pev = NULL;
-      // vscp_fifo_read(&fifoEventsIn, &pev);
-
-      // pev is NULL if no event is available here
-      // The worker is still called.
-      // if pev != NULL the worker is responsible for
-      // freeing the event
-
-      // Do VSCP protocol work here
-      // vscp2_do_work(pev);
-
-      // Handle rcvloop etc
-      // for (int i = 0; i < MAX_TCP_CONNECTIONS; i++) {
-      vscp_link_idle_worker(&ctx);
-      //}
-
-      ESP_LOGV(TAG, "Command handled");
+      else {
+        // Line longer than the buffer: drop it and tell the client
+        ESP_LOGW(TAG, "Command line too long, discarded");
+        pctx->size     = 0;
+        pctx->bDiscard = true;
+        g_link_ops.write_client(&pctx->link, VSCP_LINK_MSG_ERROR);
+      }
     }
-  };
 
-  // Mark transport channel as closed
-
-  tr_tcpsrv[ctx.id].open = false;
-
-  // Empty the queue
-  transport_flush_queue(tr_tcpsrv[ctx.id].event_queue);
-
-  ESP_LOGI(TAG, "Closing down tcp/ip client");
-
-  // If not shutdown all ready do it here
-  if (!ctx.sock) {
-    shutdown(ctx.sock, 0);
-    close(ctx.sock);
+    // Handle rcvloop etc
+    if (pctx->link.sock) {
+      vscp_link_idle_worker(&pctx->link);
+    }
   }
 
-  cntClients--;
+  ESP_LOGI(TAG, "Closing down tcp/ip client id=%d", id);
+
+  // Mark transport channel as closed and empty its queue
+  tr_tcpsrv[id].open = false;
+  transport_flush_queue(tr_tcpsrv[id].event_queue);
+
+  // Close the socket unless "quit" already did
+  if (pctx->link.sock) {
+    shutdown(pctx->link.sock, 0);
+    close(pctx->link.sock);
+    pctx->link.sock = 0;
+  }
+
+  // Wipe the context and release the slot
+  setContextDefaults(pctx);
+  pctx->bInUse = false;
+
   vTaskDelete(NULL);
 }
 
@@ -326,9 +268,7 @@ tcpsrv_task(void *pvParameters)
   struct sockaddr_storage dest_addr;
 
   for (int i = 0; i < MAX_TCP_CONNECTIONS; i++) {
-    ctx[i].id   = i;
-    ctx[i].sock = 0;
-    // vscp_fifo_init(&gctx[i].fifoEventsOut, TRANSMIT_FIFO_SIZE);
+    ctx[i].link.id = i;
     setContextDefaults(&ctx[i]);
   }
 
@@ -409,16 +349,35 @@ tcpsrv_task(void *pvParameters)
 
     ESP_LOGI(TAG, "Socket accepted ip address: %s", addr_str);
 
-    if (cntClients > MAX_TCP_CONNECTIONS) {
+    // Claim a free connection slot. Only this task claims slots; a client
+    // task releases its slot when it ends.
+    ctx_t *pctx = NULL;
+    for (int i = 0; i < MAX_TCP_CONNECTIONS; i++) {
+      if (!ctx[i].bInUse) {
+        pctx = &ctx[i];
+        break;
+      }
+    }
+
+    if (NULL == pctx) {
       ESP_LOGI(TAG, "Max number of clients. Closing connection");
-      send(sock, MSG_MAX_CLIENTS, sizeof(MSG_MAX_CLIENTS), 0);
+      send(sock, MSG_MAX_CLIENTS, strlen(MSG_MAX_CLIENTS), 0);
       shutdown(sock, 0);
       close(sock);
-      cntClients--;
       continue;
     }
 
-    xTaskCreate(client_task, "link-client", 0x2000, (void *) &sock, 5, NULL);
+    setContextDefaults(pctx);
+    pctx->link.sock = sock;
+    pctx->bInUse    = true;
+
+    if (pdPASS != xTaskCreate(client_task, "link-client", 0x2000, (void *) pctx, 5, NULL)) {
+      ESP_LOGE(TAG, "Failed to create client task");
+      shutdown(sock, 0);
+      close(sock);
+      pctx->link.sock = 0;
+      pctx->bInUse    = false;
+    }
   }
 
 CLEAN_UP:

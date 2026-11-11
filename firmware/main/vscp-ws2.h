@@ -48,8 +48,8 @@
 
   On connect the server sends { "type": "+", "args": ["AUTH0", "<sid>"] }. The client
   logs in with AUTH, args { "iv": "<sid>", "crypto": "<hex>" } where crypto is
-  AES-128-CBC("username:password") with the sid as IV and the device key. The iv
-  must equal the sid of the connection.
+  AES-128-CBC("username:password") with PKCS#7 padding, the sid as IV and the
+  device key. The iv must equal the sid of the connection.
 
   Only NOOP, CHALLENGE, AUTH, VERSION, COPYRIGHT and CLOSE are accepted before
   the client has authenticated.

@@ -20,7 +20,7 @@ set(PROJECT_VER "0.0.1.${BUILD_COUNTER_NEXT}")
 # ---------------------------------------------------------------------------
 include(FetchContent)
 
-set(VSCP_FIRMWARE_GIT_TAG "5ce94f90e316459b6a417106781dbdb9cf35fdd2"
+set(VSCP_FIRMWARE_GIT_TAG "0c4ffeeff0cfc9912b0c72eba18eafeb19615c99"
     CACHE STRING "vscp-firmware git tag/branch/commit to fetch")
 
 FetchContent_Declare(

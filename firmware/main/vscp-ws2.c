@@ -351,7 +351,8 @@ ws2_cmd_auth(vscp_ws_connection_context_t *pctx, const cJSON *args)
     goto done;
   }
 
-  // decryptFrame keeps byte 0 as an unencrypted frame type byte
+  // decryptFrame keeps byte 0 as an unencrypted frame type byte and fails
+  // unless the plaintext has valid PKCS#7 padding
   if (VSCP_ERROR_SUCCESS != vscp_fwhlp_decryptFrame(plain,
                                                     crypto,
                                                     crypto_len + 1,
@@ -362,23 +363,10 @@ ws2_cmd_auth(vscp_ws_connection_context_t *pctx, const cJSON *args)
     goto done;
   }
 
-  // Remove PKCS#7 padding if present, otherwise the text ends at the first zero byte
-  uint8_t *ptext  = plain + 1;
-  size_t text_len = crypto_len;
-  uint8_t pad     = ptext[text_len - 1];
-  if ((pad >= 1) && (pad <= 16)) {
-    bool bPkcs7 = true;
-    for (size_t i = text_len - pad; i < text_len; i++) {
-      if (ptext[i] != pad) {
-        bPkcs7 = false;
-        break;
-      }
-    }
-    if (bPkcs7) {
-      text_len -= pad;
-    }
-  }
-  ptext[text_len] = '\0';
+  // vscp_fwhlp_decryptFrame() checks the PKCS#7 padding and zeroes it, so the
+  // credentials end at the first zero byte
+  uint8_t *ptext      = plain + 1;
+  ptext[crypto_len]   = '\0';
 
   // Credentials are "username:password"
   char *username = (char *) ptext;

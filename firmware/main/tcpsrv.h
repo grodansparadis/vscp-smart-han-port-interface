@@ -30,6 +30,7 @@
 #ifndef __TCPSRV__
 #define __TCPSRV__
 
+#include <stdbool.h>
 #include <vscp.h>
 #include <vscp-fifo.h>
 #include <vscp-firmware-helper.h>
@@ -64,26 +65,24 @@
  */
 #define TRANSMIT_FIFO_SIZE 16
 
-/* 
-  Socket context 
-  This is the context for each open socket/channel.
+/*
+  Socket context
+  This is the context for each open socket/channel. The VSCP link protocol
+  state (socket, user, filter, statistics...) lives in the library context
+  'link', which is what the link protocol callbacks get.
 */
 typedef struct _ctx {
-  int id;
-  int sock;                                     // Socket
-  size_t size;                                  // Number of characters in buffer
-  char buf[TCPIP_BUF_MAX_SIZE];                 // Command Buffer
-  char user[VSCP_LINK_MAX_USER_NAME_LENGTH];    // Username storage
-  //vscp_fifo_t fifoEventsOut;                  // VSCP event send fifo
-  QueueHandle_t xmsg_Out;
-  int bValidated;                               // User is validated
-  uint8_t privLevel;                            // User privilege level 0-15
-  int bRcvLoop;                                 // Receive loop is enabled if non zero
-  vscpEventFilter filter;                       // Filter for events
-  vscp_statistics_t statistics;                    // VSCP Statistics
-  vscp_status_t status;                            // VSCP status
-  uint32_t last_rcvloop_time;                   // Time of last received event
+  vscp_link_ctx_t link;         // VSCP link protocol context (link.user_data points back here)
+  volatile bool bInUse;         // Slot is taken by a client task
+  bool bDiscard;                // Dropping the rest of an over-long line
+  size_t size;                  // Number of characters in buf
+  char buf[TCPIP_BUF_MAX_SIZE]; // Command buffer (lines are passed to the parser one by one)
 } ctx_t;
+
+/*!
+  Operations table for the VSCP link protocol (callbacks-link.c)
+*/
+extern const vscp_link_ops_t g_link_ops;
 
 #define MSG_MAX_CLIENTS "Max number of clients reached. Disconnecting.\r\n"
 
@@ -92,8 +91,8 @@ typedef struct _ctx {
 
 
 /**
- * @brief Set defaults for the Context Defaults object
- * 
+ * @brief Set defaults for a connection context
+ *
  * @param pctx Pointer to context
  */
 void
