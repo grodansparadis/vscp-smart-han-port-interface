@@ -1,0 +1,140 @@
+{
+  // markdown preview settings
+  "markdown-preview-enhanced.scrollBeyondLastLine": false,
+  "markdown-preview-enhanced.markdownItPlugins": {
+    "markdown-it-emoji": true
+  },
+  "editor.fontFamily": "Consolas, monospace",
+  "markdown.preview.fontFamily": "Consolas, monospace",
+
+
+  "idf.adapterTargetName": "esp32c3",
+  "C_Cpp.intelliSenseEngine": "Tag Parser",
+  "idf.flashType": "JTAG",
+  "idf.port": "/dev/ttyACM0",
+  "esp32.port": "-p ${config:idf.port}",
+  // Use board or interface as needed for openocd functionality
+  "esp32.openocd.board":"esp32c3-builtin.cfg",
+  "esp32.openocd.interface":"esp_usb_jtag.cfg",
+  //"esp32.openocd.interface":"esp32_devkitj_v1.cfg", // Espressif JTAG 
+  // The debugger to use (see ~/.espressif/tools/) "xtensa-esp32s2-elf-gdb"
+  // for the esp32-s2 etc
+  "esp32.debugger":"riscv32-esp-elf-gdb",
+  "esp32.firmware":"build/blink.bin",
+
+  // Extension by Seun LanLege (seunlanlege.action-buttons)
+  // Icons: https://code.visualstudio.com/api/references/icons-in-labels
+  "actionButtons": {
+    "defaultColor": "#ff0034",
+    "loadNpmCommands": false,
+    "reloadButton": "♻️",
+    "commands": [
+      {
+        "name": "$(tools)Set Target",
+        "color": "purple",
+        "singleInstance": true,
+        "tooltip": "idf.py set-target esp32c3",
+        "command": "source /home/akhe/development/esp/esp-idf/export.sh && idf.py set-target esp32c3"
+      },
+      {
+        "name": "$(tools)Build",
+        "color": "yellow",
+        "singleInstance": true,
+        "tooltip": "idf.py build",
+        "command": "source /home/akhe/development/esp/esp-idf/export.sh && idf.py build"
+      },
+      {
+        "name": "$(symbol-event)Flash",
+        "color": "cyan",
+        "singleInstance": true,
+        "tooltip": "idf.py flash  (/dev/ttyACM0)",
+        "command": "./tools/idf-flash-artifacts.sh -p /dev/ttyACM0"
+      },
+      {
+        "name": "$(terminal)Monitor",
+        "color": "cyan",
+        "singleInstance": true,
+        "tooltip": "idf.py monitor  (/dev/ttyACM0)",
+        "command": "source /home/akhe/development/esp/esp-idf/export.sh && idf.py -p /dev/ttyACM0 monitor"
+      },
+      {
+        "name": "$(rocket)Flash+Mon",
+        "color": "green",
+        "singleInstance": true,
+        "tooltip": "idf.py flash monitor  (/dev/ttyACM0)",
+        "command": "./tools/idf-flash-artifacts.sh -p /dev/ttyACM0 --monitor"
+      },
+      {
+        "name": "$(settings-gear)MenuConfig",
+        "color": "white",
+        "singleInstance": true,
+        "tooltip": "idf.py menuconfig",
+        "command": "source /home/akhe/development/esp/esp-idf/export.sh && LC_ALL=C idf.py menuconfig"
+      },
+      {
+        "name": "$(trash)FullClean",
+        "color": "orange",
+        "singleInstance": true,
+        "tooltip": "idf.py fullclean",
+        "command": "source /home/akhe/development/esp/esp-idf/export.sh && idf.py fullclean"
+      }
+    ]
+  },
+  "cSpell.words": [
+    "conviniently"
+  ],
+  "C_Cpp.errorSquiggles": "Enabled",
+  "files.associations": {
+    "esp_wifi.h": "c",
+    "qrcode.h": "c",
+    "esp_event_base.h": "c",
+    "esp_compiler.h": "c",
+    "vscp.h": "c",
+    "vscp-firmware-level2.h": "c",
+    "vscp-projdefs.h": "c",
+    "vscp-compiler.h": "c",
+    "vscp-link-protocol.h": "c"
+  },
+  "idf.espIdfPath": "/home/akhe/development/esp/esp-idf",
+  "idf.toolsPath": "/home/akhe/.espressif",
+  "idf.pythonInstallPath": "/home/akhe/.espressif/python_env/idf6.0_py3.13_env/bin/python",
+  "idf.currentSetup": "/home/akhe/development/esp/esp-idf",
+  "cmake.configureOnOpen": false,
+  "cmake.generator": "Ninja",
+  "idf.customExtraVars": {
+    "OPENOCD_SCRIPTS": "/home/akhe/.espressif/tools/openocd-esp32/v0.12.0-esp32-20251215/openocd-esp32/share/openocd/scripts",
+    "ESP_NOW_VER_MAJOR": "2",
+    "ESP_NOW_VER_MINOR": "5",
+    "ESP_NOW_VER_PATCH": "2",
+    "IDF_TARGET": "esp32c3"
+  },
+  "chat.tools.terminal.autoApprove": {
+    "idf.py": true,
+    "./tools/idf-safe.sh": true,
+    "./tools/idf-flash-artifacts.sh": true,
+    "/^source /home/akhe/development/esp/esp-idf/export\\.sh && idf\\.py build 2>&1 \\| tail -30$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^source /home/akhe/development/esp/esp-idf/export\\.sh 2>/dev/null && idf\\.py build 2>&1 \\| grep -E \"error:\\|warning:\\|FAILED\\|Build complete\\|ninja\"$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^source /home/akhe/development/esp/esp-idf/export\\.sh 2>/dev/null && idf\\.py build 2>&1 \\| grep -E \"error:\\|FAILED\\|warning:\\|ninja\"$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "cp": true,
+    "/^git rm --cached test/ws/test_vscp_binary_c && echo \"test_vscp_binary_c\" >> test/ws/\\.gitignore && git add test/ws/\\.gitignore && git commit --amend --no-edit && git show --stat HEAD$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "git -C /home/akhe/development/VSCP/vscp-din-wireless-esp32-can-z102": true
+  },
+  "files.watcherExclude": {
+    "**/.git/objects/**": true,
+    "**/.git/subtree-cache/**": true,
+    "**/node_modules/*/**": true,
+    "**/build/*/**": true
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "name": "vscp-din-wireless-esp32-can-z102-firmware-tools",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Utility scripts for firmware testing",
+  "scripts": {
+    "test:ws": "node test_websocket.js",
+    "test:ws:lab": "WS_HOST=192.168.1.100 node test_websocket.js",
+    "test:ws:probe": "node test_ws_probe.js",
+    "test:ws:probe:lab": "WS_HOST=192.168.1.100 node test_ws_probe.js",
+    "test:ws1": "node test_ws1.js",
+    "test:ws2": "node test_ws2.js",
+    "test:vscp:bin": "node test_vscp_binary.js",
+    "test:vscp:bin:lab": "WS_BINARY_URL=ws://192.168.1.100:8884/ws1 node test_vscp_binary.js",
+    "test:ws1:hs": "WS_TEST_MODE=handshake node test_ws1.js",
+    "test:ws2:hs": "WS_TEST_MODE=handshake node test_ws2.js",
+    "test:ws1:lab": "WS_HOST=192.168.1.100 node test_ws1.js",
+    "test:ws2:lab": "WS_HOST=192.168.1.100 node test_ws2.js",
+    "test:ws1:lab:hs": "WS_HOST=192.168.1.100 WS_TEST_MODE=handshake node test_ws1.js",
+    "test:ws2:lab:hs": "WS_HOST=192.168.1.100 WS_TEST_MODE=handshake node test_ws2.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

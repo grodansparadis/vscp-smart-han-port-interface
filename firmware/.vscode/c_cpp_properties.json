@@ -1,0 +1,23 @@
+{
+  "configurations": [
+    {
+      "name": "Linux",
+      "includePath": [
+        "${workspaceFolder}/**",
+        "${env:IDF_PATH}/**",
+        "${env:IDF_PATH}/components/**",
+        "${workspaceFolder}/firmware/managed_components/**",
+        "${workspaceFolder}/firmware/main/**",
+        "${workspaceFolder}/firmware/build/_deps/vscp_firmware-src/**",
+        "${workspaceFolder}/build/**"
+      ],
+      "defines": [],
+      "compilerPath": "/home/akhe/.espressif/tools/riscv32-esp-elf/esp-15.2.0_20251204/riscv32-esp-elf/bin/riscv32-esp-elf-gcc",
+      "cStandard": "c17",
+      "cppStandard": "c++14",
+      "intelliSenseMode": "linux-clang-x64",
+      "compileCommands": "${workspaceFolder}/build/compile_commands.json"
+    }
+  ],
+  "version": 4
+}

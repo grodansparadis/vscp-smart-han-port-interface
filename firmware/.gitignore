@@ -1,0 +1,15 @@
+build
+managed_components/
+CMakeFiles
+
+# Generated ESP-IDF test build artifacts
+test/*
+
+# Keep websocket test scripts/assets under version control
+!test/ws/
+!test/ws/**
+
+# But do not track generated/dependency artifacts inside ws tests
+test/ws/node_modules/
+test/ws/__pycache__/
+test/ws/*.pyc

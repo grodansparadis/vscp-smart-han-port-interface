@@ -1,0 +1,76 @@
+The config.csv is used to create the non volatile configuration value partition
+with default values. All values are described here. 
+
+The format for the csv file is described here 
+https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/storage/nvs_partition_gen.html
+
+username
+--------
+Default: "admin"
+string. Max 32, Defined in vscp-link-protocol.h
+Username for users logging in through various interfaces
+
+password
+--------
+Default: "secret"
+string. Max 80, Defined in vscp-link-protocol.h
+Password for users logging in through various interfaces
+
+guid
+----
+Default: "00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00"
+String. 16-bytes
+All nill, "-", or empty is default GUID will be used. This GUID
+is constructed from the MAC address.
+
+link-if
+-------
+Default: 0x80000
+uint32_t
+Flags for the VSCP Link interfaces
+Bit 31 - Enable interface
+
+web-if
+------
+Default: 0x80000
+uint32_t
+Flags for the web interface.
+Bit 31 - Enable interface
+
+mqtt-if
+------
+Default: 0x80000
+uint32_t
+Flags for the MQTT interface.
+Bit 31 - Enable interface
+
+can-speed
+----------
+Default: 6 (125 kbps)
+uint8_t
+Speed for CAN interface.
+
+can-filter
+----------
+Default: 0
+uint32_t
+Filter for CAN interface.
+
+can-mask
+--------
+Default: 0
+uint32_t
+Mask for CAN interface.
+
+IPv6
+----
+default: 0
+int8_t
+Flag to use IPv6 instead of IPv4
+
+origin-allow
+------------
+default: 0
+uint64_t
+IPv4, IPv6 address from which interfaces can be reached. if
+zero no check is performed.

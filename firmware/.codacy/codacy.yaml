@@ -1,0 +1,6 @@
+runtimes:
+    - python@3.11.11
+tools:
+    - lizard@1.17.31
+    - opengrep@1.16.4
+    - trivy@0.69.3

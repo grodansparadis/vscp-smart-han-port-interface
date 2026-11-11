@@ -1,0 +1,214 @@
+{
+  // Use ctrl + alt + T to select a task to run
+  // Use ctrl 0 shift + B top build
+  "tasks": [
+    // Start openocd
+    {
+      "label": "Start-OpenOCD",
+      "type": "shell",
+      "isBackground": true,
+      "command": "openocd",
+      "isShellCommand": true,    
+      "args": [
+        "-c", "set ESP_RTOS none",
+        "-f", "board/${config:esp32.openocd.board}"
+      ]
+    },
+    {
+      "label": "ESP32: Build Firmware",
+      "type": "shell",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "options": {
+        "cwd": "${workspaceRoot}",
+      },
+      "command": "./tools/idf-safe.sh build",
+      "problemMatcher": [
+        "$gcc"
+      ]
+    },
+    {
+      "label": "ESP32: FullClean",
+      "type": "shell",
+      "options": {
+        "cwd": "${workspaceRoot}",
+      },
+      "command": "source /home/akhe/development/esp/esp-idf/export.sh && idf.py fullclean",
+      "problemMatcher": []
+    },
+    {
+      "label": "ESP32: Flash app via OpenOCD (ESP32-JTAG (C3))",
+      "type": "shell",
+      "options": {
+        "cwd": "${workspaceRoot}",
+      },
+      "command": "openocd -f board/${config:esp32.openocd.board} -c \"program_esp build/vscp-can-gw.bin 0x10000 verify exit\" ",
+      "problemMatcher": []
+    },
+    {
+      "label": "ESP32: Flash partion-table via OpenOCD (ESP32-JTAG (C3))",
+      "type": "shell",
+      "options": {
+        "cwd": "${workspaceRoot}",
+      },
+      "command": "openocd -f board/${config:esp32.openocd.board} -c \"program_esp build/partition_table/partition-table.bin 0x8000  verify exit\" ",
+      "problemMatcher": []
+    },
+    {
+      "label": "ESP32: Flash bootloader via OpenOCD (ESP32-JTAG (C3))",
+      "type": "shell",
+      "options": {
+        "cwd": "${workspaceRoot}",
+      },
+      "command": "openocd -f board/${config:esp32.openocd.board} -c \"program_esp build/bootloader/bootloader.bin 0x1000 verify exit\" ",
+      "problemMatcher": []
+    },
+    {
+      "label": "ESP32: Flash via OpenOCD (ESP-Prog)",
+      "type": "shell",
+      "options": {
+        "cwd": "${workspaceRoot}",
+      },
+      "command": "openocd -f interface/ftdi/${config:esp32.openocd.interface}  -f target/${config:idf.adapterTargetName}.cfg -c \"program_esp build/blink.bin 0x10000 verify reset exit\" ",
+      "problemMatcher": []
+    },
+    {
+      "label": "ESP32: Flash all",
+      "type": "shell",
+      "options": {
+        "cwd": "${workspaceRoot}",
+      },
+      "command": "./tools/idf-safe.sh ${config:esp32.port} flash",
+      "problemMatcher": []
+    },
+    {
+      "label": "ESP32: Monitor",
+      "type": "shell",
+      "options": {
+        "cwd": "${workspaceRoot}",
+      },
+      "command": "source /home/akhe/development/esp/esp-idf/export.sh && idf.py ${config:esp32.port} monitor",
+      "problemMatcher": []
+    },
+    {
+      "label": "ESP32: Flash & Monitor",
+      "type": "shell",
+      "options": {
+        "cwd": "${workspaceRoot}",
+      },
+      "command": "./tools/idf-safe.sh ${config:esp32.port} flash monitor",
+      "problemMatcher": []
+    },
+    {
+      "label": "ESP32: Environment Check",
+      "type": "shell",
+      "options": {
+        "cwd": "${workspaceRoot}",
+      },
+      "command": "printenv",
+      "problemMatcher": []
+    },
+    {
+      "label": "ESP32: Menu Config",
+      "type": "shell",
+      "options": {
+        "cwd": "${workspaceRoot}",
+        "env": {
+            "LC_ALL": "C",
+        }
+      },
+      "command": "source /home/akhe/development/esp/esp-idf/export.sh && idf.py menuconfig",
+      "problemMatcher": []
+    },
+    {
+      "label": "ESP32: Build twai_network_master",
+      "type": "shell",
+      "options": {
+        "cwd": "${workspaceRoot}"
+      },
+      "command": "source /home/akhe/development/esp/esp-idf/export.sh && cd twai_network_master && idf.py set-target esp32c3 && idf.py build",
+      "problemMatcher": [
+        "$gcc"
+      ]
+    },
+    {
+      "label": "ESP32: Build twai_network_slave",
+      "type": "shell",
+      "options": {
+        "cwd": "${workspaceRoot}"
+      },
+      "command": "source /home/akhe/development/esp/esp-idf/export.sh && cd twai_network_slave && idf.py set-target esp32c3 && idf.py build",
+      "problemMatcher": [
+        "$gcc"
+      ]
+    },
+    {
+      "label": "ESP32: Build twai_network_listen_only",
+      "type": "shell",
+      "options": {
+        "cwd": "${workspaceRoot}"
+      },
+      "command": "source /home/akhe/development/esp/esp-idf/export.sh && cd twai_network_listen_only && idf.py set-target esp32c3 && idf.py build",
+      "problemMatcher": [
+        "$gcc"
+      ]
+    },
+    {
+      "label": "Tools: Codacy Focused",
+      "type": "shell",
+      "options": {
+        "cwd": "${workspaceRoot}"
+      },
+      "command": "cd .. && tools/run-codacy-focused.sh && tools/summarize-codacy-focused.py",
+      "problemMatcher": []
+    },
+    {
+      "label": "Tools: Codacy CLI Download",
+      "type": "shell",
+      "options": {
+        "cwd": "${workspaceRoot}"
+      },
+      "command": "./tools/codacy-cli.sh download",
+      "problemMatcher": []
+    },
+    {
+      "label": "Tools: Codacy CLI Version",
+      "type": "shell",
+      "options": {
+        "cwd": "${workspaceRoot}"
+      },
+      "command": "./tools/codacy-cli.sh --version",
+      "problemMatcher": []
+    },
+    {
+      "label": "Tools: Codacy CLI Init",
+      "type": "shell",
+      "options": {
+        "cwd": "${workspaceRoot}"
+      },
+      "command": "./tools/codacy-cli.sh init",
+      "problemMatcher": []
+    },
+    {
+      "label": "Tools: Codacy CLI Install",
+      "type": "shell",
+      "options": {
+        "cwd": "${workspaceRoot}"
+      },
+      "command": "./tools/codacy-cli.sh install",
+      "problemMatcher": []
+    },
+    {
+      "label": "Tools: Codacy CLI Analyze",
+      "type": "shell",
+      "options": {
+        "cwd": "${workspaceRoot}"
+      },
+      "command": "./tools/codacy-cli.sh analyze",
+      "problemMatcher": []
+    }
+  ],
+  "version": "2.0.0"
+}
