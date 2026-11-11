@@ -1,63 +1,63 @@
-menu "VSCP CAN4VSCP gw Configuration"
+menu "VSCP Smart meter i/f Configuration"
 
-    choice WCANG_PROV_TRANSPORT
+    choice SMP1_PROV_TRANSPORT
         bool "Provisioning Transport"
-        default WCANG_PROV_TRANSPORT_SOFTAP if IDF_TARGET_ESP32S2
-        default WCANG_PROV_TRANSPORT_BLE
+        default SMP1_PROV_TRANSPORT_SOFTAP if IDF_TARGET_ESP32S2
+        default SMP1_PROV_TRANSPORT_BLE
         help
             Wi-Fi provisioning component offers both, SoftAP and BLE transports. Choose any one.
 
-        config WCANG_PROV_TRANSPORT_BLE
+        config SMP1_PROV_TRANSPORT_BLE
             bool "BLE"
             select BT_ENABLED
             depends on !IDF_TARGET_ESP32S2
-        config WCANG_PROV_TRANSPORT_SOFTAP
+        config SMP1_PROV_TRANSPORT_SOFTAP
             bool "Soft AP"
     endchoice
 
-    choice WCANG_PROV_SECURITY_VERSION
+    choice SMP1_PROV_SECURITY_VERSION
         bool "Protocomm security version"
-        default WCANG_PROV_SECURITY_VERSION_1
+        default SMP1_PROV_SECURITY_VERSION_1
         help
             Wi-Fi provisioning component offers 3 security versions.
             The example offers a choice between security version 1 and 2.
 
-        config WCANG_PROV_SECURITY_VERSION_1
+        config SMP1_PROV_SECURITY_VERSION_1
             bool "Security version 1"
             select ESP_PROTOCOMM_SUPPORT_SECURITY_VERSION_1
 
-        config WCANG_PROV_SECURITY_VERSION_2
+        config SMP1_PROV_SECURITY_VERSION_2
             bool "Security version 2"
             select ESP_PROTOCOMM_SUPPORT_SECURITY_VERSION_2
     endchoice
 
-    choice WCANG_PROV_MODE
+    choice SMP1_PROV_MODE
         bool "Security version 2 mode"
-        depends on WCANG_PROV_SECURITY_VERSION_2
-        default WCANG_PROV_SEC2_DEV_MODE
+        depends on SMP1_PROV_SECURITY_VERSION_2
+        default SMP1_PROV_SEC2_DEV_MODE
 
-        config WCANG_PROV_SEC2_DEV_MODE
+        config SMP1_PROV_SEC2_DEV_MODE
             bool "Security version 2 development mode"
-            depends on WCANG_PROV_SECURITY_VERSION_2
+            depends on SMP1_PROV_SECURITY_VERSION_2
             help
                 This enables the development mode for
                 security version 2.
                 Please note that this mode is NOT recommended for production purpose.
 
-        config WCANG_PROV_SEC2_PROD_MODE
+        config SMP1_PROV_SEC2_PROD_MODE
             bool "Security version 2 production mode"
-            depends on WCANG_PROV_SECURITY_VERSION_2
+            depends on SMP1_PROV_SECURITY_VERSION_2
             help
                 This enables the production mode for
                 security version 2.
     endchoice
 
-    config WCANG_PROV_TRANSPORT
+    config SMP1_PROV_TRANSPORT
         int
-        default 1 if WCANG_PROV_TRANSPORT_BLE
-        default 2 if WCANG_PROV_TRANSPORT_SOFTAP
+        default 1 if SMP1_PROV_TRANSPORT_BLE
+        default 2 if SMP1_PROV_TRANSPORT_SOFTAP
 
-    config WCANG_RESET_PROVISIONED
+    config SMP1_RESET_PROVISIONED
         bool
         default n
         prompt "Reset provisioned status of the device"
@@ -65,7 +65,7 @@ menu "VSCP CAN4VSCP gw Configuration"
             This erases the NVS to reset provisioned status of the device on every reboot.
             Provisioned status is determined by the Wi-Fi STA configuration, saved on the NVS.
 
-    config WCANG_RESET_PROV_MGR_ON_FAILURE
+    config SMP1_RESET_PROV_MGR_ON_FAILURE
         bool
         default y
         prompt "Reset provisioned credentials and state machine after session failure"
@@ -73,23 +73,23 @@ menu "VSCP CAN4VSCP gw Configuration"
             Enable reseting provisioned credentials and state machine after session failure.
             This will restart the provisioning service after retries are exhausted.
 
-    config WCANG_PROV_MGR_MAX_RETRY_CNT
+    config SMP1_PROV_MGR_MAX_RETRY_CNT
         int
         default 5
         prompt "Max retries before reseting provisioning state machine"
-        depends on WCANG_RESET_PROV_MGR_ON_FAILURE
+        depends on SMP1_RESET_PROV_MGR_ON_FAILURE
         help
             Set the Maximum retry to avoid reconnecting to an inexistent AP or if credentials
             are misconfigured. Provisioned credentials are erased and internal state machine
             is reset after this threshold is reached.
 
-    config WCANG_PROV_SHOW_QR
+    config SMP1_PROV_SHOW_QR
         bool "Show provisioning QR code"
         default y
         help
             Show the QR code for provisioning.
 
-    config WCANG_PROV_USING_BLUEDROID
+    config SMP1_PROV_USING_BLUEDROID
         bool
         depends on (BT_BLUEDROID_ENABLED && (IDF_TARGET_ESP32C3 || IDF_TARGET_ESP32S3))
         select BT_BLE_42_FEATURES_SUPPORTED

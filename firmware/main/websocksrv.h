@@ -1,7 +1,7 @@
 /*
   File: websocksrv.h
 
-  VSCP Wireless CAN4VSCP Gateway (VSCP-WCANG)
+  VSCP Smart meter i/f (VSCP-SMP1)
 
   This file is part of the VSCP (https://www.vscp.org)
 

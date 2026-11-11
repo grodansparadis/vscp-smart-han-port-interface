@@ -1,5 +1,5 @@
 /*
-  VSCP Wireless CAN4VSCP Gateway (VSCP-WCANG)
+  VSCP Smart meter i/f (VSCP-SMP1)
 
   MQTT SSL Client
 

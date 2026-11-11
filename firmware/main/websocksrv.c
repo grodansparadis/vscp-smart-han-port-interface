@@ -1,7 +1,7 @@
 /*
   File: websocksrv.h
 
-  VSCP Wireless CAN4VSCP Gateway (VSCP-WCANG)
+  VSCP Smart meter i/f (VSCP-SMP1)
 
   This file is part of the VSCP (https://www.vscp.org)
 
@@ -686,42 +686,34 @@ void
 wss_send_event_task(void *pvParameters)
 {
   int rv;
-  bool send_messages     = true;
-  can4vscp_frame_t rxmsg = {};
-  uint32_t event_count   = 0;
+  bool send_messages   = true;
+  uint32_t event_count = 0;
 
   httpd_handle_t *server = (httpd_handle_t *) pvParameters;
 
-  ESP_LOGI(TAG, "wss_send_event_task: Started, listening for CAN events on tr_websockets.fromcan_queue");
+  ESP_LOGI(TAG, "wss_send_event_task: Started, listening for events on tr_websockets.event_queue");
 
-  // Continuously monitor incoming CAN events and broadcast to all WebSocket clients
+  // Continuously monitor outgoing events and broadcast to all WebSocket clients
   while (send_messages) {
 
-    // Wait for CAN event with 500ms timeout
-    if (pdPASS != xQueueReceive(tr_websockets.fromcan_queue, (void *) &rxmsg, 500)) {
+    // Wait for event with 500ms timeout. We own the event from now on.
+    vscp_event_t *pev = NULL;
+    if (pdPASS != xQueueReceive(tr_websockets.event_queue, (void *) &pev, 500)) {
       // Every 10 seconds, log that we're waiting for events
       if ((event_count % 20) == 0) {
-        ESP_LOGD(TAG, "wss_send_event_task: Waiting for CAN events (processed %lu so far)", event_count);
+        ESP_LOGD(TAG, "wss_send_event_task: Waiting for events (processed %lu so far)", event_count);
       }
       event_count++;
       continue;
     }
 
     ESP_LOGI(TAG,
-             "wss_send_event_task: Received CAN message (event_count=%lu, identifier=0x%lX, dlc=%u)",
+             "wss_send_event_task: Received event (event_count=%lu, class=%u, type=%u)",
              event_count,
-             rxmsg.identifier,
-             rxmsg.data_length_code);
+             pev->vscp_class,
+             pev->vscp_type);
 
     event_count++;
-
-    // Convert CAN4VSCP message to VSCP event
-    vscp_event_t *pev = NULL;
-    if (VSCP_ERROR_SUCCESS != (rv = can4vscp_msg_to_event(&pev, &rxmsg))) {
-      ESP_LOGE(TAG, "wss_send_event_task: Failed to convert CAN message to VSCP event rv=%d", rv);
-      vscp_fwhlp_deleteEvent(&pev);
-      continue;
-    }
 
     if (!*server) { // httpd might not have been created by now
       ESP_LOGW(TAG, "wss_send_event_task: httpd server not ready yet");

@@ -74,7 +74,6 @@
 #include "main.h"
 
 #include "vscp-binary.h"
-#include "can4vscp.h"
 #include "vscp-ws1.h"
 #include "vscp-ws-common.h"
 #include "websocksrv.h"
@@ -695,34 +694,8 @@ vscp_binary_callback_send_event(const void *pdata, const vscp_event_t *pev)
   // Mark this event as coming from this interface
   // TODO pev->obid = pctx->sock;
 
-  // Check for Level II event
-  if (pev->vscp_class > 1024) {
-    // can not send level II events on TWAI, so we just drop them in this example
-  }
-  // Check for proxy event
-  else if (pev->vscp_class > 512) {
-    ;
-  }
-  /*
-    Level I event. If addressed to nodeid = 0
-    and VSCP_CLASS1_PROTOCOL it is addressed to us
-    and we should handle it. If not send event
-    on the TWAI interface.
-  */
-  else {
-    if ((VSCP_CLASS1_PROTOCOL == pev->vscp_class) && (0 == pev->GUID[15])) {
-      ;
-    }
-    else {
-      can4vscp_frame_t tx_msg;
-      tx_msg.data_length_code = pev->sizeData;
-      tx_msg.extd             = 1;
-      tx_msg.identifier =
-        pev->GUID[0] + (pev->vscp_type << 8) + (pev->vscp_class << 16) + (((pev->head >> 5) & 7) << 26);
-      can4vscp_send(&tx_msg, portMAX_DELAY);
-      ESP_LOGI(TAG, "Transmitted start command");
-    }
-  }
+  // Let the node handle the event
+  handle_incoming_event(pev, CH_WS);
 
   // Write to send buffer of other interfaces
   for (int i = 0; i < MAX_TCP_CONNECTIONS; i++) {
@@ -837,33 +810,20 @@ vscp_binary_callback_write_client(const void *pdata, const char *msg)
   }
 
   vscp_ws_connection_context_t *pctx = (vscp_ws_connection_context_t *) pdata;
-
-  vscp_event_t ev = { 0 };
-  ev.vscp_class   = VSCP_CLASS1_PROTOCOL;
-  ev.vscp_type    = 0;
-  memcpy(ev.GUID, pctx->guid, sizeof(ev.GUID));
-
-  size_t msg_len = strlen(msg);
-  if (msg_len > 8) {
-    ESP_LOGW(TAG, "write_client: truncating payload from %u to 8 bytes for TWAI", (unsigned) msg_len);
-    msg_len = 8;
+  httpd_req_t *req                   = (httpd_req_t *) pctx->pdata;
+  if (NULL == req) {
+    ESP_LOGE(TAG, "write_client: no request context, cannot send message");
+    return VSCP_ERROR_INVALID_CONTEXT;
   }
 
-  ev.sizeData = msg_len;
-  ev.pdata    = (uint8_t *) msg;
+  httpd_ws_frame_t tx = { 0 };
+  tx.type             = HTTPD_WS_TYPE_TEXT;
+  tx.payload          = (uint8_t *) msg;
+  tx.len              = strlen(msg);
 
-  can4vscp_frame_t tx_msg = { 0 };
-  int rv                  = can4vscp_event_to_msg(&tx_msg, &ev);
-  if (VSCP_ERROR_SUCCESS != rv) {
-    return rv;
-  }
-
-  if (ESP_OK != can4vscp_send(&tx_msg, portMAX_DELAY)) {
+  if (ESP_OK != httpd_ws_send_frame(req, &tx)) {
     return VSCP_ERROR_INTERFACE;
   }
-
-  pctx->stats.cntTransmitFrames++;
-  pctx->stats.cntTransmitData += ev.sizeData;
 
   return VSCP_ERROR_SUCCESS;
 }
@@ -966,16 +926,10 @@ vscp_binary_callback_event_received(const void *pdata, const vscp_event_t *pev)
 
   vscp_ws_connection_context_t *pctx = (vscp_ws_connection_context_t *) pdata;
 
-  // Make twai message from event
-  can4vscp_frame_t tx_msg = { 0 };
-  int rv                  = can4vscp_event_to_msg(&tx_msg, pev);
+  // Let the node handle the event
+  int rv = handle_incoming_event(pev, CH_WS);
   if (VSCP_ERROR_SUCCESS != rv) {
     return rv;
-  }
-
-  // Send on TWAI interface
-  if (ESP_OK != can4vscp_send(&tx_msg, portMAX_DELAY)) {
-    return VSCP_ERROR_INTERFACE;
   }
 
   // Update statistics

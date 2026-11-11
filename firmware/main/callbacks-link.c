@@ -57,7 +57,6 @@
 static const char *TAG = "tcpsrv-cb";
 
 // Global stuff
-extern transport_t tr_twai_rx;
 extern transport_t tr_tcpsrv[MAX_TCP_CONNECTIONS];
 // from main
 extern nvs_handle_t g_nvsHandle;
@@ -161,7 +160,7 @@ uint16_t
 vscp_link_callback_get_interface_count(const void *pdata)
 {
   /* Return number of interfaces we support */
-  return 2; // see vscp_link_callback_get_interface
+  return 1; // see vscp_link_callback_get_interface
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -176,9 +175,8 @@ vscp_link_callback_get_interface(const void *pdata, uint16_t index, struct vscp_
   }
 
   /*
-    We have two interfaces on this device
-    00:00 is the CAN4VSCP channel.
-    00:01 is the internal interface for the device itself.
+    We have one interface on this device
+    00:00 is the internal interface for the device itself.
 
     Each interfaces is returned as a comma separated string with the following format:
 
@@ -195,16 +193,6 @@ vscp_link_callback_get_interface(const void *pdata, uint16_t index, struct vscp_
       memcpy(pif->guid, g_persistent.guid, 16);
       strncpy(pif->description, "Interface for the device itself", sizeof(pif->description));
       break;
-
-    case 1: {
-      uint8_t guid[16];
-      pif->idx  = index;
-      pif->type = VSCP_INTERFACE_TYPE_LEVEL1DRV;
-      memcpy(guid, g_persistent.guid, 16);
-      guid[13] = 0x01; // Interface 0x0001
-      memcpy(pif->guid, g_persistent.guid, 16);
-      strncpy(pif->description, "Interface for the CAN4VSCP channel", sizeof(pif->description));
-    } break;
 
     default:
       return VSCP_ERROR_UNKNOWN_ITEM;
@@ -443,30 +431,8 @@ vscp_link_callback_send(const void *pdata, vscp_event_t *pev)
   // Mark this event as coming from this interface
   pev->obid = pctx->sock;
 
-  // Check for Level II event
-  if (pev->vscp_class > 1024) {}
-  // Check for proxy event
-  else if (pev->vscp_class > 512) {
-    ;
-  }
-  // Level I event. If addressed to nodeid = 0
-  // and VSCP_CLASS1_PROTOCOL it is addressed to us
-  // and we should handle it. If not send event
-  // on the TWAI interface.
-  else {
-    if ((VSCP_CLASS1_PROTOCOL == pev->vscp_class) && (0 == pev->GUID[15])) {
-      ;
-    }
-    else {
-      can4vscp_frame_t tx_msg;
-      tx_msg.data_length_code = pev->sizeData;
-      tx_msg.extd             = 1;
-      tx_msg.identifier =
-        pev->GUID[0] + (pev->vscp_type << 8) + (pev->vscp_class << 16) + (((pev->head >> 5) & 7) << 26);
-      can4vscp_send(&tx_msg, portMAX_DELAY);
-      ESP_LOGI(TAG, "Transmitted start command");
-    }
-  }
+  // Let the node handle the event
+  handle_incoming_event(pev, CH_LINK);
 
   // Write event to receive fifo
 
@@ -520,9 +486,6 @@ vscp_link_callback_send(const void *pdata, vscp_event_t *pev)
 int
 vscp_link_callback_retr(const void *pdata, vscp_event_t **pev)
 {
-  BaseType_t rv;
-  can4vscp_frame_t msg = {};
-
   if ((NULL == pdata) || (NULL == pev)) {
     return VSCP_ERROR_INVALID_POINTER;
   }
@@ -530,66 +493,24 @@ vscp_link_callback_retr(const void *pdata, vscp_event_t **pev)
   // Get pointer to context
   ctx_t *pctx = (ctx_t *) pdata;
 
-  // Check if there is a TWAI message in the receive queue
-  if (pdPASS != (rv = xQueueReceive(tr_tcpsrv[pctx->id].fromcan_queue, &msg, 100))) {
+  // Check if there is an event in the queue. We own it from now on.
+  *pev = NULL;
+  if (pdPASS != xQueueReceive(tr_tcpsrv[pctx->id].event_queue, (void *) pev, 100)) {
+    *pev = NULL;
     return VSCP_ERROR_RCV_EMPTY;
   }
 
-  // OK we have a message and should return it as a VSCP event
-  // Allocate a new event
-  *pev = (vscp_event_t *) malloc(sizeof(vscpEvent));
-  if (NULL == *pev) {
-    return VSCP_ERROR_MEMORY;
-  }
-
-  // Clear event
-  memset(*pev, 0, sizeof(vscpEvent));
+  ESP_LOGV(TAG,
+           "--> Event fetched class=%u type=%u count=%u",
+           (*pev)->vscp_class,
+           (*pev)->vscp_type,
+           (unsigned) uxQueueMessagesWaiting(tr_tcpsrv[pctx->id].event_queue));
 
   // We use socket id as obid
   (*pev)->obid = pctx->sock;
 
-  // Allocate data if the message has data
-  if (msg.data_length_code) {
-    (*pev)->pdata = (uint8_t *) malloc(msg.data_length_code);
-    if (NULL == (*pev)->pdata) {
-      free(*pev);
-      *pev = NULL;
-      return VSCP_ERROR_MEMORY;
-    }
-    // Copy in data
-    (*pev)->sizeData = msg.data_length_code;
-    memcpy((*pev)->pdata, msg.data, msg.data_length_code);
-  }
-
-  ESP_LOGV(TAG, "--> Event fetched %X", (unsigned int) msg.identifier);
-
-  UBaseType_t cnt = uxQueueMessagesWaiting(tr_tcpsrv[pctx->id].fromcan_queue);
-  ESP_LOGV(TAG, "count=%u %d", cnt, rv);
-
-  (*pev)->head       = (msg.identifier >> (26 - 5)) & 0x00e0;
-  (*pev)->timestamp  = esp_timer_get_time();  // Microseconds since boot
-  (*pev)->vscp_class = (msg.identifier >> 16) & 0x1ff;
-  (*pev)->vscp_type  = (msg.identifier >> 8) & 0xff;
-
-  // GUID
-  memcpy((*pev)->GUID, g_persistent.guid, 16);
-
-  // Set nickname
-  (*pev)->GUID[14] = 0x00; // MSB of Node ID is never used for CAN4VSCP
-  (*pev)->GUID[15] = msg.identifier & 0xff;
-  (*pev)->sizeData = msg.data_length_code;
-  // Copy in data if any
-  if (msg.data_length_code) {
-    memcpy((*pev)->pdata, msg.data, msg.data_length_code);
-  }
-  // Time data set to null => first interface with this info should
-  // set timing data
-  (*pev)->year = (*pev)->month = (*pev)->day = (*pev)->hour = (*pev)->minute = (*pev)->second = 0;
-
   if (!vscp_fwhlp_doLevel2Filter(*pev, &pctx->filter)) {
-    free((*pev)->pdata);
-    free(*pev);
-    *pev = NULL;
+    vscp_fwhlp_deleteEvent(pev);
     return VSCP_ERROR_SUCCESS; // Filter out == OK
   }
 
@@ -658,7 +579,7 @@ vscp_link_callback_chkData(const void *pdata, uint16_t *pcount)
   ctx_t *pctx = (ctx_t *) pdata;
 
   //*pcount     = TRANSMIT_FIFO_SIZE - vscp_fifo_getFree(&pctx->fifoEventsOut);
-  *pcount = uxQueueMessagesWaiting(tr_tcpsrv[pctx->id].fromcan_queue);
+  *pcount = uxQueueMessagesWaiting(tr_tcpsrv[pctx->id].event_queue);
 
   return VSCP_ERROR_SUCCESS;
 }
@@ -677,7 +598,7 @@ vscp_link_callback_clrAll(const void *pdata)
   // Get pointer to context
   ctx_t *pctx = (ctx_t *) pdata;
 
-  xQueueReset(tr_tcpsrv[pctx->id].fromcan_queue);
+  transport_flush_queue(tr_tcpsrv[pctx->id].event_queue);
 
   return VSCP_ERROR_SUCCESS;
 }
@@ -839,9 +760,6 @@ vscp_link_callback_info(const void *pdata, vscp_status_t *pstatus)
 int
 vscp_link_callback_rcvloop(const void *pdata, vscp_event_t **pev)
 {
-  // BaseType_t rv;
-  // twai_message_t msg = {};
-
   // Check pointer
   if ((NULL == pdata) || (NULL == pev)) {
     return VSCP_ERROR_INVALID_POINTER;

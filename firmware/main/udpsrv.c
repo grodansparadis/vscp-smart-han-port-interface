@@ -1,7 +1,7 @@
 /*
   File: udpsrv.c
 
-  VSCP Wireless CAN4VSCP Gateway (VSCP-WCANG)
+  VSCP Smart meter i/f (VSCP-SMP1)
 
   This file is part of the VSCP (https://www.vscp.org)
 
@@ -420,8 +420,8 @@ sendEvent(int sock, struct sockaddr_in udp_addr, const char *pstrev, bool bEncry
 // udpsrv_rx_task
 //
 // This task listens for incoming UDP packets on the configured port. When a
-// packet is received, it parse the data and if a valid VSCP frame send it
-// on the CAN interface. The task runs indefinitely and handles errors gracefully,
+// packet is received, it parse the data and if a valid VSCP frame hand the
+// event to the node. The task runs indefinitely and handles errors gracefully,
 // logging any issues with socket creation, binding, or receiving data.
 
 void
@@ -665,32 +665,10 @@ udpsrv_rx_task(void *pvParameters)
           printf("----------------------------------------------------\n");
         }
 
-        // Add event to CAN queue
-        can4vscp_frame_t txmsg = {};
-        if (VSCP_ERROR_SUCCESS != (rv = can4vscp_event_to_msg(&txmsg, &ev))) {
-          ESP_LOGE(TAG, "Failed to convert VSCP event to CAN message rv=%d", rv);
-          if (ev.pdata) {
-            free(ev.pdata);
-          }
-          continue;
-        }
+        ESP_LOGI(TAG, "Received UDP event: class=%u type=%u size=%u", ev.vscp_class, ev.vscp_type, ev.sizeData);
 
-        can4vscp_frame_t tx_msg;
-        tx_msg.data_length_code = ev.sizeData;
-        tx_msg.extd             = 1;
-        tx_msg.identifier = ev.GUID[0] + (ev.vscp_type << 8) + (ev.vscp_class << 16) + (((ev.head >> 5) & 7) << 26);
-        memcpy(tx_msg.data, ev.pdata, ev.sizeData);
-
-        ESP_LOGI(TAG,
-                 "Send multicast event as CAN message to queue: class=%u type=%u size=%u",
-                 ev.vscp_class,
-                 ev.vscp_type,
-                 ev.sizeData);
-
-        esp_err_t err;
-        if (ESP_OK != (err = can4vscp_send(&tx_msg, pdMS_TO_TICKS(10)))) {
-          ESP_LOGE(TAG, "Failed to send CAN message to queue: %d", err);
-        }
+        // Let the node handle the event
+        handle_incoming_event(&ev, CH_UDP);
 
         if (ev.pdata) {
           free(ev.pdata);
@@ -717,7 +695,6 @@ void
 udpsrv_tx_task(void *pvParameters)
 {
   int rv;
-  can4vscp_frame_t rxmsg = {};
 
   (void) pvParameters;
 
@@ -725,14 +702,9 @@ udpsrv_tx_task(void *pvParameters)
 
   while (1) {
 
-    if (pdPASS != xQueueReceive(tr_udp.fromcan_queue, (void *) &rxmsg, 500)) {
-      continue;
-    }
-
+    // Get next event to send. We own it from now on.
     vscp_event_t *pev = NULL;
-    if (VSCP_ERROR_SUCCESS != (rv = can4vscp_msg_to_event(&pev, &rxmsg))) {
-      ESP_LOGE(TAG, "Failed to convert CAN message to VSCP event rv=%d", rv);
-      vscp_fwhlp_deleteEvent(&pev);
+    if (pdPASS != xQueueReceive(tr_udp.event_queue, (void *) &pev, 500)) {
       continue;
     }
 
@@ -745,7 +717,7 @@ udpsrv_tx_task(void *pvParameters)
     }
 
     ESP_LOGI(TAG,
-             "Received message from CAN queue: class=%u type=%u size=%u",
+             "Received event from queue: class=%u type=%u size=%u",
              pev->vscp_class,
              pev->vscp_type,
              pev->sizeData);
@@ -766,7 +738,7 @@ udpsrv_tx_task(void *pvParameters)
       continue;
     }
 
-    ESP_LOGV(TAG, "Prepared UDP frame (%d bytes) from CAN message. %02X %02X", len, frame[len - 2], frame[len - 1]);
+    ESP_LOGV(TAG, "Prepared UDP frame (%d bytes) from event. %02X %02X", len, frame[len - 2], frame[len - 1]);
 
     if (ESP_OK != udpsrv_broadcast_message(encbuf, newlen, NULL, 0)) {
       ESP_LOGE(TAG, "Failed to send UDP frame");

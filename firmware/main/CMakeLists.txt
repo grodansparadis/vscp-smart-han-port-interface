@@ -1,11 +1,10 @@
 
 
-idf_component_register(SRCS "main.c"
+idf_component_register(SRCS "vscp-ws2.c" "main.c"
                             "mqtt.c" 
                             "websrv.c"
                             "websocksrv.c"
                             "keep-alive.c"
-                            "can4vscp.c"
                             "urldecode.c"
                             "tcpsrv.c" 
                             "multicastsrv.c"
@@ -24,7 +23,6 @@ idf_component_register(SRCS "main.c"
                     INCLUDE_DIRS "." 
                                   "${VSCP_FIRMWARE_DIR}/common/"
                     REQUIRES mbedtls
-                             esp_driver_twai
                              spi_flash
                              esp_partition
                              app_update

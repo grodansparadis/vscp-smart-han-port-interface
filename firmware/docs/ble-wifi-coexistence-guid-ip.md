@@ -33,7 +33,7 @@ Example:
 ### During Provisioning
 
 - BLE provisioning transport is active (as before)
-- custom provisioning endpoint VSCP-WCANG is available
+- custom provisioning endpoint VSCP-SMP1 is available
 
 ### After Provisioning
 

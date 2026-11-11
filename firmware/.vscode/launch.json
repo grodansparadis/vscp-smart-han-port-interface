@@ -12,7 +12,7 @@
       "MIMode": "gdb",
       //"miDebuggerPath": "${command:espIdf.getXtensaGdb}",
       "cwd": "${workspaceFolder}/build",
-      "program": "${workspaceFolder}/build/vscp_can4vscp_gw.elf",
+      "program": "${workspaceFolder}/build/vscp_smart_p1.elf",
       // Absolute path to gdb: /home/akhe/.espressif/tools/riscv32-esp-elf/esp-2022r1-11.2.0/riscv32-esp-elf/bin/
       //"miDebuggerPath": "${config:esp32.debugger}",
       "miDebuggerPath": "/home/akhe/.espressif/tools/riscv32-esp-elf-gdb/16.3_20250913/riscv32-esp-elf-gdb/bin/riscv32-esp-elf-gdb",
@@ -23,7 +23,7 @@
         {"text":"flushregs"},
         {"text":"mon program_esp ${workspaceFolder}/build/bootloader/bootloader.bin 0x1000 verify"},
         {"text":"mon program_esp ${workspaceFolder}/build/partition_table/partition-table.bin 0x8000 verify"},
-        {"text":"mon program_esp ${workspaceFolder}/build/vscp_can4vscp_gw.bin 0x10000 verify"},
+        {"text":"mon program_esp ${workspaceFolder}/build/vscp_smart_p1.bin 0x10000 verify"},
         {"text":"monitor reset halt"},
         {"text": "thb app_main" },
         {"text":"flushregs"}
@@ -50,7 +50,7 @@
       "MIMode": "gdb",
       "miDebuggerPath": "${command:espIdf.getXtensaGdb}",
       "cwd": "${workspaceFolder}/build",
-      "program": "${workspaceFolder}/build/vscp_can4vscp_gw.elf",
+      "program": "${workspaceFolder}/build/vscp_smart_p1.elf",
       // Absolute path to gdb: /home/akhe/.espressif/tools/riscv32-esp-elf/esp-2022r1-11.2.0/riscv32-esp-elf/bin/
       //"miDebuggerPath": "${config:esp32.debugger}",
       "miDebuggerPath": "/home/akhe/.espressif/tools/riscv32-esp-elf-gdb/16.3_20250913/riscv32-esp-elf-gdb/bin/riscv32-esp-elf-gdb",
@@ -62,7 +62,7 @@
         // The following lines are commented out to avoid reprogramming on each debug session start
         // {"text":"mon program_esp ${workspaceFolder}/build/bootloader/bootloader.bin 0x1000 verify"},
         // {"text":"mon program_esp ${workspaceFolder}/build/partition_table/partition-table.bin 0x8000 verify"},
-        // {"text":"mon program_esp ${workspaceFolder}/build/vscp_can4vscp_gw.bin 0x10000 verify"},
+        // {"text":"mon program_esp ${workspaceFolder}/build/vscp_smart_p1.bin 0x10000 verify"},
         // {"text":"monitor reset halt"},
         // {"text":"thb app_main" },
         // {"text":"flushregs"}

@@ -1,9 +1,9 @@
 /*
-  VSCP Wireless CAN4VSCP Gateway (VSCP-WCANG)
+  VSCP Smart meter i/f (VSCP-SMP1)
 
   MQTT SSL/TLS Client Module
 
-  This module implements MQTT client functionality for the VSCP gateway,
+  This module implements MQTT client functionality for the VSCP smart meter interface,
   supporting both standard MQTT and secure MQTT over TLS/SSL. It handles:
   - MQTT broker connection with configurable credentials
   - Publishing VSCP events as JSON payloads
@@ -63,7 +63,6 @@
 #include <vscp.h>
 #include <vscp-firmware-helper.h>
 
-#include "can4vscp.h"
 #include <main.h>
 #include "mqtt.h"
 
@@ -449,19 +448,16 @@ mqtt_log(char *msg)
 ///////////////////////////////////////////////////////////////////////////////
 // mqtt_task_tx
 //
-// From CAN
-//
-// This task receives VSCP events from the CAN queue, converts them to JSON,
-// performs topic substitution, and publishes them to the MQTT broker. It runs
-// continuously and handles all outgoing MQTT messages based on CAN events.
+// This task receives VSCP events from the MQTT transport event queue, converts
+// them to the configured payload format, performs topic substitution, and
+// publishes them to the MQTT broker.
 
 static void
 mqtt_task_tx(void *pvParameters)
 {
   int rv;
-  can4vscp_frame_t rxmsg = {};
 
-  ESP_LOGI(TAG, "MQTT rx (from CAN) task started");
+  ESP_LOGI(TAG, "MQTT tx task started");
 
   // Add the task to the watchdog timer
   // esp_task_wdt_add(NULL);
@@ -470,19 +466,13 @@ mqtt_task_tx(void *pvParameters)
 
     // esp_task_wdt_reset(); // Reset the watchdog timer
 
-    long status = xQueueReceive(tr_mqtt.fromcan_queue, (void *) &rxmsg, 500);
-
-    if (status == pdPASS) {
-      ESP_LOGI(TAG, "Received message from CAN queue: ID=0x%X DLC=%d", rxmsg.identifier, rxmsg.data_length_code);
-    }
-
-    // Create a VSCP event from the received CAN message
-    vscp_event_t *pev;
-    if (VSCP_ERROR_SUCCESS != (rv = can4vscp_msg_to_event(&pev, &rxmsg))) {
-      ESP_LOGE(TAG, "Failed to convert CAN message to VSCP event rv=%d", rv);
-      vscp_fwhlp_deleteEvent(&pev);
+    // Get next event to publish. We own it from now on.
+    vscp_event_t *pev = NULL;
+    if (pdPASS != xQueueReceive(tr_mqtt.event_queue, (void *) &pev, 500)) {
       continue;
     }
+
+    ESP_LOGI(TAG, "Received event from queue: class=%u type=%u", pev->vscp_class, pev->vscp_type);
 
     char buf_msg[MQTT_SUBST_BUF_LEN]   = { 0 };
     char buf_topic[MQTT_SUBST_BUF_LEN] = { 0 };
@@ -546,6 +536,7 @@ mqtt_task_tx(void *pvParameters)
     // Create the dynamic topic name by substituting template tags with event values
     if (VSCP_ERROR_SUCCESS != mqtt_topic_subst(buf_topic, sizeof(buf_topic), g_persistent.mqttPubTopic, pev)) {
       ESP_LOGE(TAG, "Failed to substitute MQTT topic");
+      vscp_fwhlp_deleteEvent(&pev);
       continue;
     }
 
@@ -578,17 +569,15 @@ mqtt_task_tx(void *pvParameters)
 ///////////////////////////////////////////////////////////////////////////////
 // mqtt_task_rx
 //
-// To CAN
-//
 // This task receives MQTT messages from the mqtt_event_handler via a queue,
-// converts them to VSCP events, and forwards them to the CAN interface. It runs
-// continuously and handles all incoming MQTT messages that are relevant to the gateway.
+// converts them to VSCP events, and hands them to the node. It runs
+// continuously and handles all incoming MQTT messages that are relevant to the interface.
 
 static void
 mqtt_task_rx(void *pvParameters)
 {
   int rv;
-  ESP_LOGI(TAG, "MQTT rx (to CAN) task started");
+  ESP_LOGI(TAG, "MQTT rx task started");
 
   // Add the task to the watchdog timer
   // esp_task_wdt_add(NULL);
@@ -635,32 +624,9 @@ mqtt_task_rx(void *pvParameters)
           break;
       }
 
-      can4vscp_frame_t txmsg = { 0 };
-      txmsg.extd             = 1;
-      txmsg.identifier       = ev.GUID[0] + (ev.vscp_type << 8) + (ev.vscp_class << 16) + (((ev.head >> 5) & 7) << 26);
-
-      if (ev.sizeData > sizeof(txmsg.data)) {
-        ESP_LOGW(TAG,
-                 "VSCP event payload too large for CAN frame (%d), truncating to %d",
-                 (int) ev.sizeData,
-                 (int) sizeof(txmsg.data));
-      }
-
-      txmsg.data_length_code = MIN((size_t) ev.sizeData, sizeof(txmsg.data));
-      if (txmsg.data_length_code > 0 && NULL != ev.pdata) {
-        memcpy(txmsg.data, ev.pdata, txmsg.data_length_code);
-      }
-
-      if (ESP_OK != can4vscp_send(&txmsg, pdMS_TO_TICKS(100))) {
-        ESP_LOGW(TAG, "Failed to transmit CAN frame from MQTT payload");
-      }
-      else {
+      if (VSCP_ERROR_SUCCESS == handle_incoming_event(&ev, CH_MQTT)) {
         s_mqtt_statistics.nSub++;
-        ESP_LOGI(TAG,
-                 "MQTT->CAN forwarded topic=%s id=0x%X dlc=%d",
-                 rx.topic,
-                 txmsg.identifier,
-                 txmsg.data_length_code);
+        ESP_LOGI(TAG, "MQTT event received topic=%s class=%u type=%u", rx.topic, ev.vscp_class, ev.vscp_type);
       }
 
       if (NULL != ev.pdata) {
@@ -947,8 +913,8 @@ mqtt_start(void)
   }
 
   // Create separate tasks for MQTT TX and RX processing
-  // mqtt_task_tx handles outgoing messages based on CAN events
-  // mqtt_task_rx handles incoming MQTT messages and converts them to CAN events
+  // mqtt_task_tx handles outgoing messages from the transport event queue
+  // mqtt_task_rx handles incoming MQTT messages and hands the events to the node
   xTaskCreate(mqtt_task_tx, "mqtt_tx", 1024 * 12, (void *) &tr_mqtt, 5, NULL);
   xTaskCreate(mqtt_task_rx, "mqtt_rx", 8192, (void *) &tr_mqtt, 5, NULL);
 

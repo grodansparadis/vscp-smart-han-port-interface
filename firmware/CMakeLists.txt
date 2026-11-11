@@ -36,7 +36,7 @@ FetchContent_MakeAvailable(vscp_firmware)
 set(VSCP_FIRMWARE_DIR "${vscp_firmware_SOURCE_DIR}")
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-project(vscp_can4vscp_gw)
+project(vscp_smart_p1)
 
 set(BUILD_COUNTER_HEADER ${CMAKE_BINARY_DIR}/build_counter.h)
 

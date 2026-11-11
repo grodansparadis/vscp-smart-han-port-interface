@@ -1,17 +1,15 @@
-extern void
-twai_transmit_task(void *arg);
 /*
   File: main.c
 
-  VSCP Wireless CAN4VSCP Gateway
+  VSCP Smart meter i/f
 
   Main application entry point and system initialization for ESP32-C3 based
-  VSCP CAN gateway with WiFi connectivity. This module handles:
+  VSCP smart meter interface with WiFi connectivity. This module handles:
 
   - System initialization and boot sequence
   - NVS (Non-Volatile Storage) configuration management
   - WiFi provisioning (BLE or SoftAP based)
-  - CAN/TWAI driver initialization and message routing
+  - Event distribution to the network transports
   - Network service initialization (MQTT, TCP, UDP, Multicast, WebSockets)
   - Web server for configuration interface
   - Event handling for WiFi and provisioning events
@@ -52,7 +50,6 @@ twai_transmit_task(void *arg);
 
 #include <driver/gpio.h>
 #include "esp_task_wdt.h"
-#include <esp_twai.h>
 #include <esp_event.h>
 #include <esp_http_server.h>
 #include <esp_log.h>
@@ -75,20 +72,19 @@ twai_transmit_task(void *arg);
 #include "iot_button.h"
 #include "button_gpio.h"
 
-#ifdef CONFIG_WCANG_PROV_TRANSPORT_BLE
+#ifdef CONFIG_SMP1_PROV_TRANSPORT_BLE
 #include <network_provisioning/scheme_ble.h>
-#endif /* CONFIG_WCANG_PROV_TRANSPORT_BLE */
+#endif /* CONFIG_SMP1_PROV_TRANSPORT_BLE */
 
-#ifdef CONFIG_WCANG_PROV_TRANSPORT_SOFTAP
+#ifdef CONFIG_SMP1_PROV_TRANSPORT_SOFTAP
 #include <network_provisioning/scheme_softap.h>
-#endif /* CONFIG_WCANG_PROV_TRANSPORT_SOFTAP */
+#endif /* CONFIG_SMP1_PROV_TRANSPORT_SOFTAP */
 #include "qrcode.h"
 
 #include <vscp.h>
 #include <vscp-firmware-helper.h>
 #include <vscp-crc.h>
 
-#include "can4vscp.h"
 #include "tcpsrv.h"
 #include "udpsrv.h"
 #include "multicastsrv.h"
@@ -115,7 +111,7 @@ nvs_handle_t g_nvsHandle;
  * @brief Global persistent configuration structure
  *
  * Contains all device configuration parameters including network settings,
- * CAN parameters, MQTT/UDP/TCP settings, and user credentials. Values are
+ * MQTT/UDP/TCP settings, and user credentials. Values are
  * initialized with defaults and loaded from NVS during startup.
  *
  * Modified via web interface and saved to NVS for persistence across reboots.
@@ -129,11 +125,6 @@ node_persistent_config_t g_persistent = {
   .pmkLen      = 16,                       // AES128 (for future use)
   .pmk         = { 0 },                    // Default key is all nills
   .encryptLvl  = DEFAULT_ENCRYPTION_LEVEL, // 0 = none, 1 = AES128, 2 = AES192, 3 = AES256
-
-  // CAN/TWAI
-  .canSpeed  = DEFAULT_CAN_SPEED,
-  .canMode   = DEFAULT_CAN_MODE,
-  .canFilter = DEFAULT_CAN_FILTER,
 
   .logType      = DEFAULT_LOG_TYPE,               // Log type
   .logLevel     = DEFAULT_LOG_LEVEL,              // Log level
@@ -208,8 +199,8 @@ static led_indicator_handle_t led_handle_status = NULL;
  * @brief Transport layer message queue structures
  *
  * Each transport mechanism (TCP, MQTT, Multicast, UDP, WebSockets) has its own
- * message queue for receiving CAN messages. Messages are distributed from the
- * CAN receive queue to all active transport queues.
+ * event queue. Events produced by this node are copied to all active transport
+ * queues by dispatch_event_to_transports().
  */
 transport_t tr_tcpsrv[MAX_TCP_CONNECTIONS] = {}; // TCP/IP VSCP link protocol connections
 transport_t tr_mqtt                        = {}; // MQTT client transport
@@ -217,25 +208,122 @@ transport_t tr_multicast                   = {}; // Multicast UDP transport
 transport_t tr_udp                         = {}; // UDP broadcast transport
 transport_t tr_websockets                  = {}; // WebSocket server transport
 
-// Dedicated monitor/command-reply transport - always fed by twai_receive_task
-transport_t tr_canapi  = {};
-transport_t tr_monitor = {};
-
-// Semaphore for controlling access to main event distribution task
-SemaphoreHandle_t ctrl_task_sem;
-
 // ============================================================================
-//                        CAN/TWAI Message Queues
+//                         Event Distribution
 // ============================================================================
 
-/**
- * @brief CAN message queues for transmit and receive
- *
- * tr_twai_tx: Outgoing CAN messages from all network interfaces
- * tr_twai_rx: Incoming CAN messages distributed to network interfaces
- */
-static QueueHandle_t tr_twai_tx;
-static QueueHandle_t tr_twai_rx;
+///////////////////////////////////////////////////////////////////////////////
+// transport_queue_event
+//
+// Queue a copy of an event on a transport event queue. The copy is owned by
+// the queue (and later by the transport task that receives it).
+//
+
+static void
+transport_queue_event(transport_t *ptr, const vscp_event_t *pev, const char *name)
+{
+  if ((NULL == ptr) || (NULL == ptr->event_queue)) {
+    return;
+  }
+
+  vscp_event_t *pnew = vscp_fwhlp_mkEventCopy(pev);
+  if (NULL == pnew) {
+    ptr->overruns++;
+    ESP_LOGW(TAG, "%s: Out of memory when copying event", name);
+    return;
+  }
+
+  if (pdPASS != xQueueSendToBack(ptr->event_queue, (void *) &pnew, (TickType_t) 10)) {
+    vscp_fwhlp_deleteEvent(&pnew);
+    ptr->overruns++;
+    ESP_LOGD(TAG, "%s buffer full: Failed to save event to queue", name);
+  }
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// dispatch_event_to_transports
+//
+
+int
+dispatch_event_to_transports(const vscp_event_t *pev)
+{
+  if (NULL == pev) {
+    return VSCP_ERROR_INVALID_POINTER;
+  }
+
+  // VSCP link - all open tcp/ip link clients
+  if (g_persistent.enableVscpLink) {
+    for (int i = 0; i < MAX_TCP_CONNECTIONS; i++) {
+      if (tr_tcpsrv[i].open) {
+        transport_queue_event(&tr_tcpsrv[i], pev, "VSCP link");
+      }
+    }
+  }
+
+  if (g_persistent.enableMqtt) {
+    transport_queue_event(&tr_mqtt, pev, "MQTT");
+  }
+
+  if (g_persistent.enableMulticast) {
+    transport_queue_event(&tr_multicast, pev, "Multicast");
+  }
+
+  if (g_persistent.enableUdpTx) {
+    transport_queue_event(&tr_udp, pev, "UDP");
+  }
+
+  if (g_persistent.enableWebsock) {
+    transport_queue_event(&tr_websockets, pev, "Websocket");
+  }
+
+  g_persistent.nSent++;
+
+  return VSCP_ERROR_SUCCESS;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// handle_incoming_event
+//
+// Events sent to the node by remote clients end up here.
+//
+
+int
+handle_incoming_event(const vscp_event_t *pev, dev_channel_t channel)
+{
+  if (NULL == pev) {
+    return VSCP_ERROR_INVALID_POINTER;
+  }
+
+  g_persistent.nRecv++;
+
+  ESP_LOGD(TAG,
+           "Incoming event on channel %d: class=%u type=%u size=%u",
+           (int) channel,
+           pev->vscp_class,
+           pev->vscp_type,
+           pev->sizeData);
+
+  // TODO: Handle events addressed to this node
+
+  return VSCP_ERROR_SUCCESS;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// transport_flush_queue
+//
+
+void
+transport_flush_queue(QueueHandle_t queue)
+{
+  if (NULL == queue) {
+    return;
+  }
+
+  vscp_event_t *pev = NULL;
+  while (pdPASS == xQueueReceive(queue, (void *) &pev, 0)) {
+    vscp_fwhlp_deleteEvent(&pev);
+  }
+}
 
 // ============================================================================
 //                           Web Server Handle
@@ -248,11 +336,11 @@ static httpd_handle_t server_httpd = NULL;
 //                    WiFi Provisioning Security (Version 2)
 // ============================================================================
 
-#if CONFIG_WCANG_PROV_SECURITY_VERSION_2
+#if CONFIG_SMP1_PROV_SECURITY_VERSION_2
 
-#if CONFIG_WCANG_PROV_SEC2_DEV_MODE
-#define WCANG_PROV_SEC2_USERNAME "testuser"
-#define WCANG_PROV_SEC2_PWD      "testpassword"
+#if CONFIG_SMP1_PROV_SEC2_DEV_MODE
+#define SMP1_PROV_SEC2_USERNAME "testuser"
+#define SMP1_PROV_SEC2_PWD      "testpassword"
 
 /**
  * Salt and verifier for SEC2 provisioning authentication
@@ -306,14 +394,14 @@ static const char sec2_verifier[] = {
  * @return ESP_OK on success, ESP_FAIL if not implemented
  */
 static esp_err_t
-wcang_get_sec2_salt(const char **salt, uint16_t *salt_len)
+smp1_get_sec2_salt(const char **salt, uint16_t *salt_len)
 {
-#if CONFIG_WCANG_PROV_SEC2_DEV_MODE
+#if CONFIG_SMP1_PROV_SEC2_DEV_MODE
   ESP_LOGI(TAG, "Development mode: using hard coded salt");
   *salt     = sec2_salt;
   *salt_len = sizeof(sec2_salt);
   return ESP_OK;
-#elif CONFIG_WCANG_PROV_SEC2_PROD_MODE
+#elif CONFIG_SMP1_PROV_SEC2_PROD_MODE
   ESP_LOGE(TAG, "Not implemented!");
   return ESP_FAIL;
 #endif
@@ -334,14 +422,14 @@ wcang_get_sec2_salt(const char **salt, uint16_t *salt_len)
  * @return ESP_OK on success, ESP_FAIL if not implemented
  */
 static esp_err_t
-wcang_get_sec2_verifier(const char **verifier, uint16_t *verifier_len)
+smp1_get_sec2_verifier(const char **verifier, uint16_t *verifier_len)
 {
-#if CONFIG_WCANG_PROV_SEC2_DEV_MODE
+#if CONFIG_SMP1_PROV_SEC2_DEV_MODE
   ESP_LOGI(TAG, "Development mode: using hard coded verifier");
   *verifier     = sec2_verifier;
   *verifier_len = sizeof(sec2_verifier);
   return ESP_OK;
-#elif CONFIG_WCANG_PROV_SEC2_PROD_MODE
+#elif CONFIG_SMP1_PROV_SEC2_PROD_MODE
   /* This code needs to be updated with appropriate implementation to provide verifier */
   ESP_LOGE(TAG, "Not implemented!");
   return ESP_FAIL;
@@ -380,7 +468,6 @@ init_watchdog_timer(void)
  *
  * Configuration includes:
  * - Node name and GUID
- * - CAN/TWAI settings (mode, speed, filter)
  * - WiFi credentials (primary and secondary)
  * - Web server settings
  * - VSCP link protocol settings
@@ -548,36 +635,6 @@ initPersistentStorage(void)
                          "%d");
 
   // * * * Log persistent configuration * * *
-
-  NVS_GET_OR_SET_DEFAULT(u8,
-                         nvs_get_u8,
-                         nvs_set_u8,
-                         g_nvsHandle,
-                         "canSpeed",
-                         g_persistent.canSpeed,
-                         DEFAULT_CAN_SPEED,
-                         TAG,
-                         "%d");
-
-  NVS_GET_OR_SET_DEFAULT(u8,
-                         nvs_get_u8,
-                         nvs_set_u8,
-                         g_nvsHandle,
-                         "canMode",
-                         g_persistent.canMode,
-                         DEFAULT_CAN_MODE,
-                         TAG,
-                         "%d");
-
-  NVS_GET_OR_SET_DEFAULT(u32,
-                         nvs_get_u32,
-                         nvs_set_u32,
-                         g_nvsHandle,
-                         "canFilter",
-                         g_persistent.canFilter,
-                         DEFAULT_CAN_FILTER,
-                         TAG,
-                         "%d");
 
   NVS_GET_OR_SET_DEFAULT(u8,
                          nvs_get_u8,
@@ -1127,7 +1184,7 @@ get_device_guid(uint8_t *pguid)
 static void
 event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data)
 {
-#ifdef CONFIG_WCANG_RESET_PROV_MGR_ON_FAILURE
+#ifdef CONFIG_SMP1_RESET_PROV_MGR_ON_FAILURE
   static int retries;
 #endif
   if (event_base == NETWORK_PROV_EVENT) {
@@ -1167,9 +1224,9 @@ event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *ev
                  "\n\tPlease reset to factory and retry provisioning",
                  (*reason == NETWORK_PROV_WIFI_STA_AUTH_ERROR) ? "Wi-Fi station authentication failed"
                                                                : "Wi-Fi access-point not found");
-#ifdef CONFIG_WCANG_RESET_PROV_MGR_ON_FAILURE
+#ifdef CONFIG_SMP1_RESET_PROV_MGR_ON_FAILURE
         retries++;
-        if (retries >= CONFIG_WCANG_PROV_MGR_MAX_RETRY_CNT) {
+        if (retries >= CONFIG_SMP1_PROV_MGR_MAX_RETRY_CNT) {
           ESP_LOGI(TAG, "Failed to connect with provisioned AP, reseting provisioned credentials");
           network_prov_mgr_reset_wifi_sm_state_on_failure();
           retries = 0;
@@ -1179,7 +1236,7 @@ event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *ev
       }
       case NETWORK_PROV_WIFI_CRED_SUCCESS:
         ESP_LOGI(TAG, "Provisioning successful");
-#ifdef CONFIG_WCANG_RESET_PROV_MGR_ON_FAILURE
+#ifdef CONFIG_SMP1_RESET_PROV_MGR_ON_FAILURE
         retries = 0;
 #endif
         break;
@@ -1350,7 +1407,7 @@ apply_sta_ip_config(void)
 }
 
 esp_err_t
-wcang_reconfigure_wifi_sta(void)
+smp1_reconfigure_wifi_sta(void)
 {
   if (NULL == s_sta_netif) {
     return ESP_ERR_INVALID_STATE;
@@ -1405,7 +1462,7 @@ get_device_service_name(char *service_name, size_t max)
 /**
  * @brief Handle custom data during WiFi provisioning
  *
- * This handler is called when custom data is sent to the "VSCP-WCANG" provisioning
+ * This handler is called when custom data is sent to the "VSCP-SMP1" provisioning
  * endpoint. It allows configuring secondary WiFi credentials during the initial
  * provisioning process.
  *
@@ -1504,7 +1561,7 @@ wifi_prov_print_qr(const char *name, const char *username, const char *pop, cons
   // Build JSON payload with provisioning information
   char payload[150] = { 0 };
   if (pop) {
-#if CONFIG_WCANG_PROV_SECURITY_VERSION_1
+#if CONFIG_SMP1_PROV_SECURITY_VERSION_1
     snprintf(payload,
              sizeof(payload),
              "{\"ver\":\"%s\",\"name\":\"%s\""
@@ -1513,7 +1570,7 @@ wifi_prov_print_qr(const char *name, const char *username, const char *pop, cons
              name,
              pop,
              transport);
-#elif CONFIG_WCANG_PROV_SECURITY_VERSION_2
+#elif CONFIG_SMP1_PROV_SECURITY_VERSION_2
     snprintf(payload,
              sizeof(payload),
              "{\"ver\":\"%s\",\"name\":\"%s\""
@@ -1534,7 +1591,7 @@ wifi_prov_print_qr(const char *name, const char *username, const char *pop, cons
              name,
              transport);
   }
-#ifdef CONFIG_WCANG_PROV_SHOW_QR
+#ifdef CONFIG_SMP1_PROV_SHOW_QR
   ESP_LOGI(TAG, "Scan this QR code from the provisioning application for Provisioning.");
   esp_qrcode_config_t cfg = ESP_QRCODE_CONFIG_DEFAULT();
   esp_qrcode_generate(&cfg, payload);
@@ -1583,17 +1640,16 @@ led_indicator_init(led_indicator_handle_t *handle, int gpio_num)
  * 1. NVS Flash: Initialize non-volatile storage for configuration
  * 2. Networking: Initialize TCP/IP stack and event loop
  * 3. GPIO: Configure status LEDs (connected, active)
- * 4. Message Queues: Create FreeRTOS queues for CAN and network transports
+ * 4. Message Queues: Create FreeRTOS event queues for the network transports
  * 5. WiFi: Register event handlers and initialize WiFi subsystem
  * 6. Provisioning: Handle initial WiFi setup (BLE or SoftAP based)
  * 7. Configuration: Load persistent settings from NVS
  * 8. Web Server: Start HTTP configuration interface
- * 9. CAN/TWAI: Initialize CAN bus driver with configured parameters
- * 10. Network Services: Start TCP server for VSCP link protocol
- * 11. Main Loop: Distribute CAN messages to active network transports
+ * 9. Network Services: Start TCP server for VSCP link protocol
+ * 10. Main Loop: Idle loop
  *
- * The main loop waits for CAN messages on tr_twai_rx queue and distributes
- * them to all enabled transport mechanisms (TCP, MQTT, UDP, etc.).
+ * Events produced by the node are sent to all enabled transport mechanisms
+ * (TCP, MQTT, UDP, etc.) with dispatch_event_to_transports().
  */
 void
 app_main(void)
@@ -1700,44 +1756,21 @@ app_main(void)
   // ============================================================================
 
   /**
-   * Message queue architecture:
-   * - tr_twai_rx: Receives CAN messages from bus (distributed to all transports)
-   * - tr_twai_tx: Transmits CAN messages to bus (from all transports)
+   * Event queue architecture (each queue holds vscp_event_t pointers):
    * - tr_tcpsrv[]: One queue per TCP connection for VSCP link protocol
-   * - tr_mqtt: MQTT transport message queue
-   * - tr_multicast: UDP multicast transport queue
-   * - tr_udp: UDP unicast/broadcast transport queue
-   * - tr_websockets: WebSocket transport queue
+   * - tr_mqtt: MQTT transport event queue
+   * - tr_multicast: UDP multicast transport event queue
+   * - tr_udp: UDP unicast/broadcast transport event queue
+   * - tr_websockets: WebSocket transport event queue
    */
-  tr_twai_rx = xQueueCreate(10, sizeof(can4vscp_frame_t)); // Incoming CAN messages  <-- from bus
-  tr_twai_tx = xQueueCreate(40, sizeof(can4vscp_frame_t)); // Outgoing CAN messages  --> to bus
-
-  // Create message queues for each TCP connection
   for (int i = 0; i < MAX_TCP_CONNECTIONS; i++) {
-    tr_tcpsrv[i].tocan_queue   = xQueueCreate(10, sizeof(can4vscp_frame_t));
-    tr_tcpsrv[i].fromcan_queue = xQueueCreate(10, sizeof(can4vscp_frame_t));
+    tr_tcpsrv[i].event_queue = xQueueCreate(10, sizeof(vscp_event_t *));
   }
 
-  // Create message queues for network transports
-  tr_mqtt.tocan_queue         = xQueueCreate(10, sizeof(can4vscp_frame_t));
-  tr_mqtt.fromcan_queue       = xQueueCreate(10, sizeof(can4vscp_frame_t));
-  tr_multicast.tocan_queue    = xQueueCreate(10, sizeof(can4vscp_frame_t));
-  tr_multicast.fromcan_queue  = xQueueCreate(10, sizeof(can4vscp_frame_t));
-  tr_udp.tocan_queue          = xQueueCreate(10, sizeof(can4vscp_frame_t));
-  tr_udp.fromcan_queue        = xQueueCreate(10, sizeof(can4vscp_frame_t));
-  tr_websockets.tocan_queue   = xQueueCreate(10, sizeof(can4vscp_frame_t));
-  tr_websockets.fromcan_queue = xQueueCreate(10, sizeof(can4vscp_frame_t));
-
-  // HTTP CAN API command/reply queues
-  tr_canapi.tocan_queue   = xQueueCreate(10, sizeof(can4vscp_frame_t));
-  tr_canapi.fromcan_queue = xQueueCreate(50, sizeof(can4vscp_frame_t));
-
-  // Monitor transport queues (depth 50 buffers bursts between poll intervals)
-  tr_monitor.tocan_queue   = xQueueCreate(10, sizeof(can4vscp_frame_t));
-  tr_monitor.fromcan_queue = xQueueCreate(50, sizeof(can4vscp_frame_t));
-
-  // Create control semaphore for main task synchronization
-  ctrl_task_sem = xSemaphoreCreateBinary();
+  tr_mqtt.event_queue       = xQueueCreate(10, sizeof(vscp_event_t *));
+  tr_multicast.event_queue  = xQueueCreate(10, sizeof(vscp_event_t *));
+  tr_udp.event_queue        = xQueueCreate(10, sizeof(vscp_event_t *));
+  tr_websockets.event_queue = xQueueCreate(10, sizeof(vscp_event_t *));
 
   // ============================================================================
   //                      WiFi Event Handler Registration
@@ -1755,7 +1788,7 @@ app_main(void)
   // Create WiFi station network interface
   s_sta_netif = esp_netif_create_default_wifi_sta();
 
-#ifdef CONFIG_WCANG_PROV_TRANSPORT_SOFTAP
+#ifdef CONFIG_SMP1_PROV_TRANSPORT_SOFTAP
   // Create WiFi AP interface for SoftAP provisioning
   esp_netif_create_default_wifi_ap();
 #endif
@@ -1773,8 +1806,8 @@ app_main(void)
 
   /**
    * WiFi provisioning allows initial configuration via:
-   * - BLE (CONFIG_WCANG_PROV_TRANSPORT_BLE): Bluetooth Low Energy
-   * - SoftAP (CONFIG_WCANG_PROV_TRANSPORT_SOFTAP): Temporary WiFi AP
+   * - BLE (CONFIG_SMP1_PROV_TRANSPORT_BLE): Bluetooth Low Energy
+   * - SoftAP (CONFIG_SMP1_PROV_TRANSPORT_SOFTAP): Temporary WiFi AP
    *
    * Security options:
    * - SEC1: Proof of Possession (POP) based authentication
@@ -1784,10 +1817,10 @@ app_main(void)
   // Configure provisioning manager
   network_prov_mgr_config_t config = {
   // Select provisioning transport scheme (BLE or SoftAP)
-#ifdef CONFIG_WCANG_PROV_TRANSPORT_BLE
+#ifdef CONFIG_SMP1_PROV_TRANSPORT_BLE
     .scheme = network_prov_scheme_ble,
 #endif
-#ifdef CONFIG_WCANG_PROV_TRANSPORT_SOFTAP
+#ifdef CONFIG_SMP1_PROV_TRANSPORT_SOFTAP
     .scheme = network_prov_scheme_softap,
 #endif
 
@@ -1798,10 +1831,10 @@ app_main(void)
    * - SoftAP: NETWORK_PROV_EVENT_HANDLER_NONE
    *   No special memory management needed
    */
-#ifdef CONFIG_WCANG_PROV_TRANSPORT_BLE
+#ifdef CONFIG_SMP1_PROV_TRANSPORT_BLE
     .scheme_event_handler = NETWORK_PROV_SCHEME_BLE_EVENT_HANDLER_FREE_BTDM
 #endif
-#ifdef CONFIG_WCANG_PROV_TRANSPORT_SOFTAP
+#ifdef CONFIG_SMP1_PROV_TRANSPORT_SOFTAP
                               .scheme_event_handler = NETWORK_PROV_EVENT_HANDLER_NONE
 #endif
   };
@@ -1813,7 +1846,7 @@ app_main(void)
   ESP_ERROR_CHECK(network_prov_mgr_init(config));
 
   bool provisioned = false;
-#ifdef CONFIG_WCANG_RESET_PROVISIONED
+#ifdef CONFIG_SMP1_RESET_PROVISIONED
   network_prov_mgr_reset_wifi_provisioning();
 #else
   /* Let's find out if the device is provisioned */
@@ -1836,7 +1869,7 @@ app_main(void)
     char service_name[12];
     get_device_service_name(service_name, sizeof(service_name));
 
-#ifdef CONFIG_WCANG_PROV_SECURITY_VERSION_1
+#ifdef CONFIG_SMP1_PROV_SECURITY_VERSION_1
     /*
      * What is the security level that we want (0, 1, 2):
      *
@@ -1854,7 +1887,7 @@ app_main(void)
      *   - this should be a string with length > 0
      *   - NULL if not used
      */
-    const char *pop = "VSCP-CAN4VSCP-GATEWAY-WiFi";
+    const char *pop = "VSCP-SMART-METER-IF-WiFi";
     /*
      * If the pop is allocated dynamically, then it should be valid till
      * the provisioning process is running.
@@ -1870,19 +1903,19 @@ app_main(void)
 
     const char *username = NULL;
 
-#elif CONFIG_WCANG_PROV_SECURITY_VERSION_2
+#elif CONFIG_SMP1_PROV_SECURITY_VERSION_2
     network_prov_security_t security = NETWORK_PROV_SECURITY_2;
     // The username must be the same one, which has been used in the generation of salt and verifier
 
-#if CONFIG_WCANG_PROV_SEC2_DEV_MODE
+#if CONFIG_SMP1_PROV_SEC2_DEV_MODE
     /*
      * This pop field represents the password that will be used to generate salt and verifier.
      * The field is present here in order to generate the QR code containing password.
      * In production this password field shall not be stored on the device
      */
-    const char *username = WCANG_PROV_SEC2_USERNAME;
-    const char *pop      = WCANG_PROV_SEC2_PWD;
-#elif CONFIG_WCANG_PROV_SEC2_PROD_MODE
+    const char *username = SMP1_PROV_SEC2_USERNAME;
+    const char *pop      = SMP1_PROV_SEC2_PWD;
+#elif CONFIG_SMP1_PROV_SEC2_PROD_MODE
     /*
      * The username and password shall not be embedded in the firmware,
      * they should be provided to the user by other means.
@@ -1898,8 +1931,8 @@ app_main(void)
      */
     network_prov_security2_params_t sec2_params = {};
 
-    ESP_ERROR_CHECK(wcang_get_sec2_salt(&sec2_params.salt, &sec2_params.salt_len));
-    ESP_ERROR_CHECK(wcang_get_sec2_verifier(&sec2_params.verifier, &sec2_params.verifier_len));
+    ESP_ERROR_CHECK(smp1_get_sec2_salt(&sec2_params.salt, &sec2_params.salt_len));
+    ESP_ERROR_CHECK(smp1_get_sec2_verifier(&sec2_params.verifier, &sec2_params.verifier_len));
 
     network_prov_security2_params_t *sec_params = &sec2_params;
 #endif
@@ -1907,7 +1940,7 @@ app_main(void)
     // Service key for provisioning (password for SoftAP, ignored for BLE)
     const char *service_key = NULL;
 
-#ifdef CONFIG_WCANG_PROV_TRANSPORT_BLE
+#ifdef CONFIG_SMP1_PROV_TRANSPORT_BLE
     /**
      * Set custom 128-bit UUID for BLE provisioning service
      *
@@ -1929,11 +1962,11 @@ app_main(void)
     /**
      * Create custom provisioning endpoint for secondary WiFi configuration
      *
-     * The "VSCP-WCANG" endpoint allows sending additional configuration data
+     * The "VSCP-SMP1" endpoint allows sending additional configuration data
      * during provisioning (e.g., secondary WiFi credentials). Must be created
      * before starting provisioning.
      */
-    network_prov_mgr_endpoint_create("VSCP-WCANG");
+    network_prov_mgr_endpoint_create("VSCP-SMP1");
 
     // Start provisioning service with configured security and service name
     ESP_ERROR_CHECK(
@@ -1942,18 +1975,18 @@ app_main(void)
     /**
      * Register handler for custom endpoint
      *
-     * The custom_prov_data_handler receives data sent to the "VSCP-WCANG" endpoint,
+     * The custom_prov_data_handler receives data sent to the "VSCP-SMP1" endpoint,
      * allowing configuration of secondary WiFi and other custom parameters.
      * Must be registered after starting provisioning.
      */
-    network_prov_mgr_endpoint_register("VSCP-WCANG", custom_prov_data_handler, NULL);
+    network_prov_mgr_endpoint_register("VSCP-SMP1", custom_prov_data_handler, NULL);
 
     // Display QR code for easy provisioning via mobile app
-#ifdef CONFIG_WCANG_PROV_TRANSPORT_BLE
+#ifdef CONFIG_SMP1_PROV_TRANSPORT_BLE
     wifi_prov_print_qr(service_name, username, pop, PROV_TRANSPORT_BLE);
-#else  /* CONFIG_WCANG_PROV_TRANSPORT_SOFTAP */
+#else  /* CONFIG_SMP1_PROV_TRANSPORT_SOFTAP */
     wifi_prov_print_qr(service_name, username, pop, PROV_TRANSPORT_SOFTAP);
-#endif /* CONFIG_WCANG_PROV_TRANSPORT_BLE */
+#endif /* CONFIG_SMP1_PROV_TRANSPORT_BLE */
   }
   else {
     // Device already provisioned - skip provisioning and connect directly
@@ -1990,37 +2023,8 @@ app_main(void)
   // }
 
   // ============================================================================
-  //                    CAN/TWAI Initialization
-  // ============================================================================
-
-  /**
-   * Initialize CAN (TWAI) bus driver:
-   * - Configure timing based on bitrate (125K default)
-   * - Set up message filtering
-   * - Enable/disable listen-only mode based on configuration
-   * - Create receive task for incoming CAN messages
-   */
-
-  // Initialize CAN interface with 125 kbps bitrate
-  can4vscp_init(CAN4VSCP_125K);
-
-  // Apply configured bitrate (loaded from NVS)
-  can4vscp_setBitrate(CAN4VSCP_125K);
-
-  // Enable CAN controller
-  can4vscp_enable();
-
-  // ============================================================================
   //                    Task Creation
   // ============================================================================
-
-  // Create CAN receive task that fills tr_twai_rx queue
-  // Create CAN receive and transmit tasks
-  xTaskCreate(twai_receive_task, "can4vscp_rx", 4096, &tr_twai_rx, 10, NULL);
-  xTaskCreate(twai_transmit_task, "can4vscp_tx", 2048, NULL, 10, NULL);
-
-  // Release control semaphore to allow task execution
-  xSemaphoreGive(ctrl_task_sem);
 
   // Create TCP server task for VSCP link protocol (IPv4)
   xTaskCreate(tcpsrv_task, "tcpsrv", 4096, (void *) AF_INET, 5, NULL);
@@ -2046,59 +2050,10 @@ app_main(void)
   // ws_start();          // Start WebSocket server task if enabled
 
   // ============================================================================
-  //                    Main Event Distribution Loop
+  //                    Main Loop
   // ============================================================================
 
-  /**
-   * Main application loop:
-   *
-   * 1. Wait for CAN messages on tr_twai_rx queue (from CAN receive task)
-   * 2. Distribute received messages to all active transport queues:
-   *    - TCP connections (VSCP link protocol clients)
-   *    - MQTT broker (if enabled)
-   *    - UDP multicast/unicast (if enabled)
-   *    - WebSocket clients (if enabled)
-   * 3. Transport-specific tasks handle queue-to-network transmission
-   *
-   * This implements the gateway's core functionality: bridging CAN bus
-   * to various network protocols for remote VSCP event access.
-   */
-
   while (1) {
-
-    // esp_task_wdt_reset(); // Reset the watchdog timer
-
-    can4vscp_frame_t msg = {};
-
-    // Block waiting for CAN message from receive task
-    if (xQueueReceive(tr_twai_rx, &msg, portMAX_DELAY) == pdPASS) {
-
-      ESP_LOGI(TAG, "--> CAN event received, ID: 0x%X", (unsigned int) msg.identifier);
-
-      // Log queue depth for monitoring
-      UBaseType_t cnt = uxQueueMessagesWaiting(tr_twai_rx);
-      ESP_LOGD(TAG, "Queue depth: %u", cnt);
-
-      /**
-       * TODO: Distribute message to all active transport queues
-       *
-       * For each enabled transport:
-       * - Check if transport is enabled (from g_persistent config)
-       * - Check if queue has space (xQueueSendToBack with timeout)
-       * - Send message to queue for transmission
-       *
-       * Example:
-       * if (g_persistent.enableMqtt) {
-       *   xQueueSendToBack(tr_mqtt.msg_queue, &msg, 0);
-       * }
-       */
-    }
-
-    // Synchronize with control task
-    xSemaphoreTake(ctrl_task_sem, portMAX_DELAY);
-    xSemaphoreGive(ctrl_task_sem);
-
-    // Yield to other tasks
     vTaskDelay(1000 / portTICK_PERIOD_MS);
   }
 

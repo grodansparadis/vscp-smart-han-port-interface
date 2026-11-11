@@ -2,7 +2,7 @@
 #include <nvs.h>
 
 /*
-  VSCP Wireless CAN4VSCP Gateway (VSCP-WCANG)
+  VSCP Smart meter i/f (VSCP-SMP1)
 
   This file is part of the VSCP (https://www.vscp.org)
 
@@ -28,18 +28,14 @@
   SOFTWARE.
 */
 
-#ifndef __VSCP_WCANG_H__
-#define __VSCP_WCANG_H__
+#ifndef __VSCP_SMP1_H__
+#define __VSCP_SMP1_H__
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/queue.h>
 
 #include "vscp.h"
-#include "can4vscp.h"
-
-#define TWAI_TX_GPIO_NUM GPIO_NUM_9  // CAN TX
-#define TWAI_RX_GPIO_NUM GPIO_NUM_10 // CAN RX
 
 // LED defintitions
 #define LED_WIFI_GPIO 0
@@ -101,7 +97,6 @@ NVS_GET_OR_SET_DEFAULT_STR(g_nvsHandle, "webUser", g_persistent.webUser, "vscp",
 
 typedef enum {
   CH_LINK = 0, // tcp/ip link protocol
-  CH_CAN,      // CAN
   CH_WS,       // websocket I & II
   CH_UDP,      // UDP
   CH_MULTI,    // Multicast
@@ -121,9 +116,8 @@ typedef struct {
     };
     uint32_t flags; /**< Don't use */
   };
-  QueueHandle_t tocan_queue;   /**< RX message queue for transport --> To CAN bus */
-  QueueHandle_t fromcan_queue; /**< TX message queue for transport --> From CAN bus */
-  uint32_t overruns;           /**< Queue overrun counter */
+  QueueHandle_t event_queue; /**< Outgoing events for the transport (holds vscp_event_t pointers) */
+  uint32_t overruns;         /**< Queue overrun counter */
 
 } transport_t;
 
@@ -139,22 +133,16 @@ typedef struct {
 #define DEFAULT_BLE_ENABLE       true
 #define DEFAULT_ADVERTISE_ENABLE true
 
-// TWAI
-#define DEFAULT_TWAI_MODE  0 // CAN4VSCP_NORMAL
-#define DEFAULT_TWAI_SPEED CAN4VSCP_125K
-// #define TX_GPIO_NUM        GPIO_NUM_9  // CONFIG_EXAMPLE_TX_GPIO_NUM
-// #define RX_GPIO_NUM        GPIO_NUM_10 // GPIO_NUM_3 CONFIG_EXAMPLE_RX_GPIO_NUM
-
 // SMTP
 #define DEFAULT_SMTP_ENABLE false
 
 // OTA
 #define DEFAULT_APP_OTA_URL_MAX_SIZE 128
-#define DEFAULT_APP_OTA_URL          "http://vscp.org/firmware/vscp-can4vscp-gw/firmware.bin"
+#define DEFAULT_APP_OTA_URL          "http://vscp.org/firmware/vscp-smart-p1/firmware.bin"
 
 #define DEFAULT_TCPIP_VER 4 // Ipv6 = 6 or Ipv4 = 4
 #define TCPSRV_WELCOME_MSG                                                                                             \
-  "Welcome to the VSCP CAN4VSCP Gateway\r\n"                                                                           \
+  "Welcome to the VSCP Smart meter i/f\r\n"                                                                            \
   "Copyright (C) 2000-2026 Grodans Paradis AB\r\n"                                                                     \
   "https://www.grodansparadis.com\r\n"                                                                                 \
   "+OK\r\n"
@@ -178,18 +166,13 @@ typedef struct {
 
 // System defaults
 
-#define DEFAULT_NODE_NAME        "VSCP CAN4VSCP Gateway"
+#define DEFAULT_NODE_NAME        "VSCP Smart meter i/f"
 #define DEFAULT_ENCRYPTION_LEVEL VSCP_ENCRYPTION_NONE // 0 = none, 1 = AES128, 2 = AES192, 3 = AES256
 #define DEFAULT_MODULE_ZONE      0  // VSCP zone for module
 #define DEFAULT_MODULE_SUBZONE   0  // VSCP subzone for module
 
 #define DEFAULT_LOG_URL  " "
 #define DEFAULT_LOG_PORT 514
-
-#define DEFAULT_CAN_MODE   0          // CAN4VSCP_NORMAL
-#define DEFAULT_CAN_SPEED  6          // CAN4VSCP_125K
-#define DEFAULT_CAN_FILTER 0xFFFFFFFF // Accept all
-#define DEFAULT_CAN_RAW    false       // Send and understand raw CAN frames
 
 #define DEFAULT_LOG_TYPE         LOG_TYPE_STD
 #define DEFAULT_LOG_LEVEL        0
@@ -212,9 +195,9 @@ typedef struct {
 #define DEFAULT_MQTT_USER              ""
 #define DEFAULT_MQTT_PASSWORD          ""
 #define DEFAULT_MQTT_PUBLISH           "vscp/{{guid}}/{{class}}/{{type}}/{{sindex}}"
-#define DEFAULT_MQTT_SUBSCRIBE         "can4vscpgw/{{guid}}"
-#define DEFAULT_MQTT_LOG_PUBLISH_TOPIC "can4vscpgw/{{guid}}/log"
-#define DEFAULT_MQTT_CLIENT_ID         "vscp-can4vscpgw"
+#define DEFAULT_MQTT_SUBSCRIBE         "vscp-smp1/{{guid}}"
+#define DEFAULT_MQTT_LOG_PUBLISH_TOPIC "vscp-smp1/{{guid}}/log"
+#define DEFAULT_MQTT_CLIENT_ID         "vscp-smp1"
 #define DEFAULT_MQTT_CA_CERT           ""
 #define DEFAULT_MQTT_CLIENT_CERT       ""
 #define DEFAULT_MQTT_CLIENT_KEY        ""
@@ -258,15 +241,11 @@ typedef struct {
   uint8_t pmkLen;     // For future use, Now always 16 (AES128)
   uint32_t bootCnt;   // Number of restarts (not editable)
 
-  // CAN
-  uint8_t canMode;    // CAN mode (normal, listen only, etc)
-  uint8_t canSpeed;   // CAN speed (125k, 250k, etc
-  uint32_t nSent;     // Number of sent messages (not editable)
-  uint32_t nRecv;     // Number of received messages (not editable)
+  // Statistics
+  uint32_t nSent;     // Number of sent events (not editable)
+  uint32_t nRecv;     // Number of received events (not editable)
   uint32_t nErr;      // Number of errors (not editable)
   uint32_t lastError; // Last error code (not editable)
-  uint32_t canFilter; // CAN filter for incoming data
-  uint8_t bRawCan;    // Send and understand raw CAN frames 
 
   // Log
   uint8_t logType;         // Log type
@@ -361,25 +340,42 @@ bool
 validate_user(const char *user, const char *password);
 
 esp_err_t
-wcang_reconfigure_wifi_sta(void);
+smp1_reconfigure_wifi_sta(void);
 
 /**
- * @brief Dedicated CAN command/reply transport for the HTTP CAN API.
+ * @fn dispatch_event_to_transports
+ * @brief Send an event produced by this node to all active transports
  *
- * Used by:
- *   - HTTP /canapi?cmd=send    (queued TX to CAN bus)
- *   - HTTP /canapi?cmd=scan    (command replies only)
- *   - HTTP /canapi?cmd=whis    (command replies only)
+ * A private copy of the event is queued on the event queue of each enabled
+ * transport (VSCP link clients, MQTT, multicast, UDP, websockets). The
+ * transport task that receives the copy owns it and must delete it with
+ * vscp_fwhlp_deleteEvent when done.
+ *
+ * @param pev Event to send. Not modified and still owned by the caller.
+ * @return VSCP_ERROR_SUCCESS on success, else error code.
  */
-extern transport_t tr_canapi;
+int
+dispatch_event_to_transports(const vscp_event_t *pev);
 
 /**
- * @brief Dedicated CAN monitor/command-reply transport.
+ * @fn handle_incoming_event
+ * @brief Handle an event received from a remote client on one of the transports
  *
- * twai_receive_task pushes every received extended frame to
- * tr_monitor.fromcan_queue unconditionally.  Used by:
- *   - HTTP /canapi?cmd=monitor  (passive bus display)
+ * @param pev Event received. Not modified and still owned by the caller.
+ * @param channel Transport the event was received on.
+ * @return VSCP_ERROR_SUCCESS on success, else error code.
  */
-extern transport_t tr_monitor;
+int
+handle_incoming_event(const vscp_event_t *pev, dev_channel_t channel);
+
+/**
+ * @fn transport_flush_queue
+ * @brief Remove and delete all events waiting in a transport event queue
+ *
+ * @param queue Event queue holding vscp_event_t pointers.
+ */
+void
+transport_flush_queue(QueueHandle_t queue);
+
 
 #endif

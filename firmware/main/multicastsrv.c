@@ -315,7 +315,6 @@ multicast_tx_task(void *pvParameters)
 
   int rv;
   TickType_t lastHeartbeatSent = 0;
-  can4vscp_frame_t rxmsg       = {};
   // struct ip_mreq mc_req;
   struct sockaddr_in multicast_addr;
   int sock;
@@ -366,19 +365,14 @@ multicast_tx_task(void *pvParameters)
       lastHeartbeatSent = xTaskGetTickCount();
     }
 
-    if (pdPASS != xQueueReceive(tr_multicast.fromcan_queue, (void *) &rxmsg, 500)) {
-      continue;
-    }
-
+    // Get next event to send. We own it from now on.
     vscp_event_t *pev = NULL;
-    if (VSCP_ERROR_SUCCESS != (rv = can4vscp_msg_to_event(&pev, &rxmsg))) {
-      ESP_LOGE(TAG, "Failed to convert CAN message to VSCP event rv=%d", rv);
-      vscp_fwhlp_deleteEvent(&pev);
+    if (pdPASS != xQueueReceive(tr_multicast.event_queue, (void *) &pev, 500)) {
       continue;
     }
 
     ESP_LOGI(TAG,
-             "Received message from CAN queue: class=%u type=%u size=%u",
+             "Received event from queue: class=%u type=%u size=%u",
              pev->vscp_class,
              pev->vscp_type,
              pev->sizeData);
@@ -408,7 +402,7 @@ multicast_tx_task(void *pvParameters)
     }
 
     ESP_LOGI(TAG,
-             "Prepared Multicast frame (%d bytes) from CAN message. %02X %02X",
+             "Prepared Multicast frame (%d bytes) from event. %02X %02X",
              len,
              frame[len - 2],
              frame[len - 1]);
@@ -551,22 +545,6 @@ multicast_rx_task(void *pvParameters)
       continue;
     }
 
-    // Add event to CAN queue
-    can4vscp_frame_t txmsg = {};
-    if (VSCP_ERROR_SUCCESS != (rv = can4vscp_event_to_msg(&txmsg, &ev))) {
-      ESP_LOGE(TAG, "Failed to convert VSCP event to CAN message rv=%d", rv);
-      if (ev.pdata) {
-        free(ev.pdata);
-      }
-      continue;
-    }
-
-    can4vscp_frame_t tx_msg;
-    tx_msg.data_length_code = ev.sizeData;
-    tx_msg.extd             = 1;
-    tx_msg.identifier       = ev.GUID[0] + (ev.vscp_type << 8) + (ev.vscp_class << 16) + (((ev.head >> 5) & 7) << 26);
-    memcpy(tx_msg.data, ev.pdata, ev.sizeData);
-
     if (0) {
       printf("Event:\n");
       printf("Head: %d\n", ev.head);
@@ -589,25 +567,10 @@ multicast_rx_task(void *pvParameters)
       printf("----------------------------------------------------\n");
     }
 
-    can4vscp_frame_t msg = { 0 };
-    if (VSCP_ERROR_SUCCESS != can4vscp_event_to_msg(&msg, &ev)) {
-      ESP_LOGE(TAG, "Failed to convert VSCP event to CAN message rv=%d", rv);
-      if (ev.pdata) {
-        free(ev.pdata);
-      }
-      continue;
-    }
+    ESP_LOGI(TAG, "Received multicast event: class=%u type=%u size=%u", ev.vscp_class, ev.vscp_type, ev.sizeData);
 
-    ESP_LOGI(TAG,
-             "Send multicast event as CAN message to queue: class=%u type=%u size=%u",
-             ev.vscp_class,
-             ev.vscp_type,
-             ev.sizeData);
-
-    esp_err_t err;         
-    if (ESP_OK != (err = can4vscp_send(&msg, pdMS_TO_TICKS(10)))) {
-      ESP_LOGE(TAG, "Failed to send CAN message to queue: %d", err);
-    }
+    // Let the node handle the event
+    handle_incoming_event(&ev, CH_MULTI);
 
     if (ev.pdata) {
       free(ev.pdata);

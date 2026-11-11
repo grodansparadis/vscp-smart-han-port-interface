@@ -191,7 +191,7 @@ function startUpload() {
 */
 #define WEBPAGE_START_TEMPLATE "<!DOCTYPE html><html lang=\"en\"><head><meta charset='utf-8'>" \
 "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1,user-scalable=no\" />" \
-"<title>VSCP Gateway</title>"\
+"<title>VSCP Smart meter i/f</title>"\
 "<script>" \
 WEBPAGE_JS1 \
 WEBPAGE_JS2 \

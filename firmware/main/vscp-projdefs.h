@@ -62,7 +62,7 @@
   Name of device for level II capabilities announcement event.
   Max 32 characters.
 */
-#define THIS_FIRMWARE_DEVICE_NAME "VSCP Wireless CAN Gateway"
+#define THIS_FIRMWARE_DEVICE_NAME "VSCP Smart meter i/f"
 
 /**
  * If defined an UDP heartbeat is broadcasted every minute.
@@ -170,7 +170,7 @@
 /**
  * URL to MDF file
  */
-#define THIS_FIRMWARE_MDF_URL "eurosource.se/wcang0.mdf"
+#define THIS_FIRMWARE_MDF_URL "eurosource.se/smp1_0.mdf"
 
 /**
  * 16-bit firmware code for this device

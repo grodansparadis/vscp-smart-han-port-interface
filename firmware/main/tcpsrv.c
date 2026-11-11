@@ -1,7 +1,7 @@
 /*
   File: tcpsrv.c
 
-  VSCP Wireless CAN4VSCP Gateway (VSCP-WCANG)
+  VSCP Smart meter i/f (VSCP-SMP1)
 
   This file is part of the VSCP (https://www.vscp.org)
 
@@ -73,7 +73,6 @@
 #define KEEPALIVE_COUNT    3 // Keep-alive probe packet retry count.
 
 // Global stuff
-extern transport_t tr_twai_rx;
 extern transport_t tr_tcpsrv[MAX_TCP_CONNECTIONS];
 
 static const char *TAG = "tcpsrv";
@@ -183,14 +182,6 @@ client_task(void *pvParameters)
 
   // Greet client
   send(ctx.sock, TCPSRV_WELCOME_MSG, sizeof(TCPSRV_WELCOME_MSG), 0);
-
-  // twai_message_t rxmsg = {};
-  // rxmsg.identifier = 0x12345;
-  // if( pdPASS != (rv = xQueueSendToBack( tr_twai_rx.msg_queue,
-  //                                       (void *)&rxmsg,
-  //                                       (TickType_t)10)) ) {
-  //   ESP_LOGI(TAG, "Buffer full: Failed to save message toRX queue");
-  // }
 
   while (1) {
 
@@ -304,8 +295,7 @@ client_task(void *pvParameters)
   tr_tcpsrv[ctx.id].open = false;
 
   // Empty the queue
-  xQueueReset(tr_tcpsrv[ctx.id].tocan_queue);
-  xQueueReset(tr_tcpsrv[ctx.id].fromcan_queue);
+  transport_flush_queue(tr_tcpsrv[ctx.id].event_queue);
 
   ESP_LOGI(TAG, "Closing down tcp/ip client");
 

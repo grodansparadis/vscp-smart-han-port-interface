@@ -123,39 +123,6 @@
       "problemMatcher": []
     },
     {
-      "label": "ESP32: Build twai_network_master",
-      "type": "shell",
-      "options": {
-        "cwd": "${workspaceRoot}"
-      },
-      "command": "source /home/akhe/development/esp/esp-idf/export.sh && cd twai_network_master && idf.py set-target esp32c3 && idf.py build",
-      "problemMatcher": [
-        "$gcc"
-      ]
-    },
-    {
-      "label": "ESP32: Build twai_network_slave",
-      "type": "shell",
-      "options": {
-        "cwd": "${workspaceRoot}"
-      },
-      "command": "source /home/akhe/development/esp/esp-idf/export.sh && cd twai_network_slave && idf.py set-target esp32c3 && idf.py build",
-      "problemMatcher": [
-        "$gcc"
-      ]
-    },
-    {
-      "label": "ESP32: Build twai_network_listen_only",
-      "type": "shell",
-      "options": {
-        "cwd": "${workspaceRoot}"
-      },
-      "command": "source /home/akhe/development/esp/esp-idf/export.sh && cd twai_network_listen_only && idf.py set-target esp32c3 && idf.py build",
-      "problemMatcher": [
-        "$gcc"
-      ]
-    },
-    {
       "label": "Tools: Codacy Focused",
       "type": "shell",
       "options": {

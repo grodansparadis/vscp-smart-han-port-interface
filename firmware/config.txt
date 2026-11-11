@@ -44,24 +44,6 @@ uint32_t
 Flags for the MQTT interface.
 Bit 31 - Enable interface
 
-can-speed
-----------
-Default: 6 (125 kbps)
-uint8_t
-Speed for CAN interface.
-
-can-filter
-----------
-Default: 0
-uint32_t
-Filter for CAN interface.
-
-can-mask
---------
-Default: 0
-uint32_t
-Mask for CAN interface.
-
 IPv6
 ----
 default: 0
