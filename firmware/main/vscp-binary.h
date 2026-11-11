@@ -48,6 +48,12 @@
 #define VSCP_BINARY_MAX_USERNAME_LENGTH 32
 #define VSCP_BINARY_MAX_PASSWORD_LENGTH 32
 
+// Upper bound for a null terminated message sent with vscp_binary_callback_write_client.
+// Messages not terminated within this many bytes are rejected.
+#ifndef VSCP_BINARY_MAX_CLIENT_MSG_LENGTH
+#define VSCP_BINARY_MAX_CLIENT_MSG_LENGTH 4096
+#endif
+
 // Binary command codes
 #define VSCP_BINARY_COMMAND_CODE_NOOP      0x0000 /* No operation command */
 #define VSCP_BINARY_COMMAND_CODE_QUIT      0x0001 /* Quit connection */

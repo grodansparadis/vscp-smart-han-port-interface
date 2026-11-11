@@ -49,6 +49,7 @@
 #include "tcpsrv.h"
 
 #include <ctype.h>
+#include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -101,7 +102,31 @@ vscp_link_callback_write_client(const void *pdata, const char *msg)
   // Get pointer to context
   ctx_t *pctx = (ctx_t *) pdata;
 
-  send(pctx->sock, (uint8_t *) msg, strlen(msg), 0);
+  // Bounded length scan: never read past VSCP_LINK_MAX_CLIENT_MSG_LENGTH bytes
+  // even if the caller passes a buffer that is not null terminated.
+  size_t len = strnlen(msg, VSCP_LINK_MAX_CLIENT_MSG_LENGTH);
+  if (len >= VSCP_LINK_MAX_CLIENT_MSG_LENGTH) {
+    ESP_LOGE(TAG,
+             "write_client: message not null terminated within %d bytes, not sent",
+             VSCP_LINK_MAX_CLIENT_MSG_LENGTH);
+    return VSCP_ERROR_PARAMETER;
+  }
+
+  // send() may write fewer bytes than requested; loop until all is sent.
+  const uint8_t *p = (const uint8_t *) msg;
+  while (len > 0) {
+    ssize_t n = send(pctx->sock, p, len, 0);
+    if (n < 0) {
+      if (EINTR == errno) {
+        continue;
+      }
+      ESP_LOGE(TAG, "write_client: send failed, errno=%d", errno);
+      return VSCP_ERROR_ERROR;
+    }
+    p += n;
+    len -= (size_t) n;
+  }
+
   return VSCP_ERROR_SUCCESS;
 }
 
@@ -271,7 +296,6 @@ vscp_link_callback_check_password(const void *pdata, const char *arg)
   }
 
   ESP_LOGI(TAG, "Username:'%s'\n", pctx->user);
-  ESP_LOGI(TAG, "Password '%s'\n", p);
 
   // if (0 == strcmp(pctx->user, "admin") && 0 == strcmp(p, "secret")) {
 

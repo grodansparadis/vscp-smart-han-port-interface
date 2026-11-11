@@ -3307,7 +3307,7 @@ do_config_vscplink_get_handler(httpd_req_t *req)
           free(buf);
           return ESP_ERR_NO_MEM;
         }
-        ESP_LOGD(TAG, "Found query parameter => password=%s", pdecoded);
+        ESP_LOGD(TAG, "Found query parameter => password (not logged)");
         strncpy(g_persistent.vscplinkPw, pdecoded, sizeof(g_persistent.vscplinkPw) - 1);
         // Write changed value to persistent storage
         rv = nvs_set_str(g_nvsHandle, "vscplinkPw", g_persistent.vscplinkPw);
@@ -3628,7 +3628,7 @@ do_config_mqtt_get_handler(httpd_req_t *req)
           free(buf);
           return ESP_ERR_NO_MEM;
         }
-        ESP_LOGD(TAG, "Found query parameter => password=%s", pdecoded);
+        ESP_LOGD(TAG, "Found query parameter => password (not logged)");
         strncpy(g_persistent.mqttPw, pdecoded, sizeof(g_persistent.mqttPw) - 1);
         // Write changed value to persistent storage
         rv = nvs_set_str(g_nvsHandle, "mqttPw", g_persistent.mqttPw);
@@ -4430,7 +4430,7 @@ do_config_websockets_get_handler(httpd_req_t *req)
           free(buf);
           return ESP_ERR_NO_MEM;
         }
-        ESP_LOGD(TAG, "Found query parameter => password=%s", pdecoded);
+        ESP_LOGD(TAG, "Found query parameter => password (not logged)");
         strncpy(g_persistent.websockPw, pdecoded, sizeof(g_persistent.websockPw) - 1);
         // Write changed value to persistent storage
         rv = nvs_set_str(g_nvsHandle, "websockPw", g_persistent.websockPw);
@@ -4591,7 +4591,7 @@ do_config_web_get_handler(httpd_req_t *req)
           free(buf);
           return ESP_ERR_NO_MEM;
         }
-        ESP_LOGD(TAG, "Found query parameter => password=%s", pdecoded);
+        ESP_LOGD(TAG, "Found query parameter => password (not logged)");
         strncpy(g_persistent.webPassword, pdecoded, sizeof(g_persistent.webPassword) - 1);
         // Write changed value to persistent storage
         rv = nvs_set_str(g_nvsHandle, "webPassword", g_persistent.webPassword);

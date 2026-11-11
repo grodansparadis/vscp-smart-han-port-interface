@@ -193,7 +193,7 @@ vscp_ws1_callback_validate_user(vscp_ws_connection_context_t *pctx,
   *p++           = '\0'; // Null-terminate username
   char *password = p;    // Null terminated password starts after the colon
 
-  ESP_LOGV(TAG, "Decrypted credentials - Username: %s, Password: %s", username, password);
+  ESP_LOGV(TAG, "Decrypted credentials - Username: %s", username);
 
   return VSCP_ERROR_SUCCESS;
 }

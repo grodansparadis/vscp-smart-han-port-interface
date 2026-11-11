@@ -41,6 +41,12 @@
 // Buffer 
 #define TCPIP_BUF_MAX_SIZE (1024)
 
+// Upper bound for a null terminated message sent with vscp_link_callback_write_client.
+// Messages not terminated within this many bytes are rejected.
+#ifndef VSCP_LINK_MAX_CLIENT_MSG_LENGTH
+#define VSCP_LINK_MAX_CLIENT_MSG_LENGTH 4096
+#endif
+
 /** 
  * VSCP TCP link protocol character buffer size
  */

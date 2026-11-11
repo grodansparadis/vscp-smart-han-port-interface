@@ -536,7 +536,6 @@ vscp_binary_callback_password(const void *pdata, const char *password)
   }
 
   ESP_LOGI(TAG, "Username:'%s'\n", pctx->user.username);
-  ESP_LOGI(TAG, "Password '%s'\n", p);
 
   if (validate_user(pctx->user.username, p)) {
     pctx->bAuthenticated = true;
@@ -816,10 +815,20 @@ vscp_binary_callback_write_client(const void *pdata, const char *msg)
     return VSCP_ERROR_INVALID_CONTEXT;
   }
 
+  // Bounded length scan: never read past VSCP_BINARY_MAX_CLIENT_MSG_LENGTH bytes
+  // even if the caller passes a buffer that is not null terminated.
+  size_t len = strnlen(msg, VSCP_BINARY_MAX_CLIENT_MSG_LENGTH);
+  if (len >= VSCP_BINARY_MAX_CLIENT_MSG_LENGTH) {
+    ESP_LOGE(TAG,
+             "write_client: message not null terminated within %d bytes, not sent",
+             VSCP_BINARY_MAX_CLIENT_MSG_LENGTH);
+    return VSCP_ERROR_PARAMETER;
+  }
+
   httpd_ws_frame_t tx = { 0 };
   tx.type             = HTTPD_WS_TYPE_TEXT;
   tx.payload          = (uint8_t *) msg;
-  tx.len              = strlen(msg);
+  tx.len              = len;
 
   if (ESP_OK != httpd_ws_send_frame(req, &tx)) {
     return VSCP_ERROR_INTERFACE;
