@@ -572,7 +572,7 @@ vscp_ws1_handle_command(const char *pCommand, const char *parg, vscp_ws_connecti
       return VSCP_ERROR_INVALID_FORMAT;
     }
 
-    if (16 != (crypto_bin_len = vscp_fwhlp_hex2bin(crypto + 1, sizeof(crypto), crypto_hex))) {
+    if (16 != (crypto_bin_len = vscp_fwhlp_hex2bin(crypto + 1, sizeof(crypto) - 1, crypto_hex))) {
       ESP_LOGE(TAG, "Failed to convert AUTH crypto from hex %d", crypto_bin_len);
       vscp_ws1_callback_reply(pctx, "-;AUTH;8,Not authorized");
       return VSCP_ERROR_INVALID_FORMAT;

@@ -339,6 +339,39 @@ getMilliSeconds(void);
 bool
 validate_user(const char *user, const char *password);
 
+/**
+ * @fn validate_ws_user
+ * @brief Validate websocket (ws1) user against the configured websocket credentials
+ *
+ * @param user Username to check
+ * @param password Password to check
+ * @return True if user is valid, False if not.
+ */
+bool
+validate_ws_user(const char *user, const char *password);
+
+/**
+ * @fn secure_str_equal
+ * @brief Constant-time comparison of two null terminated strings
+ *
+ * @param stored Reference string
+ * @param supplied String to compare with the reference
+ * @param maxlen Size of the buffers. Strings not terminated within maxlen never match.
+ * @return True if the strings are equal, False if not.
+ */
+bool
+secure_str_equal(const char *stored, const char *supplied, size_t maxlen);
+
+/**
+ * @fn secure_zero
+ * @brief Clear a buffer in a way the compiler will not optimise away
+ *
+ * @param buf Buffer to clear
+ * @param len Number of bytes to clear
+ */
+void
+secure_zero(void *buf, size_t len);
+
 esp_err_t
 smp1_reconfigure_wifi_sta(void);
 

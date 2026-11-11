@@ -171,28 +171,57 @@ vscp_ws1_callback_validate_user(vscp_ws_connection_context_t *pctx,
   //size_t len;
   uint8_t encbuf[128] = { 0 };
 
+  if ((NULL == pctx) || (NULL == pcrypt) || (NULL == psid)) {
+    return VSCP_ERROR_INVALID_POINTER;
+  }
+
+  // Start unauthenticated; only a successful check below sets the user
+  memset(pctx->user.username, 0, sizeof(pctx->user.username));
+  pctx->user.privlevel = 0;
+
+  // Decrypted data must fit in encbuf with room left for a terminating null
+  if ((0 == crypto_len) || (crypto_len >= sizeof(encbuf))) {
+    ESP_LOGE(TAG, "Invalid credentials length %d", crypto_len);
+    return VSCP_ERROR_INVALID_PERMISSION;
+  }
+
   ESP_LOGI(TAG, "Validating user with encrypted credentials crypto_len=%d", crypto_len);
 
   // Decrypt the credentials using the session ID as the IV and the pre-shared key
   if (VSCP_ERROR_SUCCESS !=
       (rv = vscp_fwhlp_decryptFrame(encbuf, pcrypt, crypto_len, g_persistent.pmk, psid, VSCP_HLO_ENCRYPTION_AES128))) {
     ESP_LOGE(TAG, "Failed to decrypt credentials with error %d", rv);
+    secure_zero(encbuf, sizeof(encbuf));
     return rv;
   }
+  encbuf[sizeof(encbuf) - 1] = '\0';
 
   // The decrypted credentials should be in the format "username:password"
   char *p = strchr((char *) encbuf + 1, ':');
   if (NULL == p) {
     ESP_LOGE(TAG, "Invalid decrypted credentials format");
+    secure_zero(encbuf, sizeof(encbuf));
     return VSCP_ERROR_INVALID_PERMISSION;
   }
 
   char *username = (char *) encbuf + 1;
-  *p             = '\0'; // Null-terminate username, password follows the colon
+  *p++           = '\0'; // Null-terminate username
+  char *password = p;    // Null terminated password starts after the colon
 
-  ESP_LOGV(TAG, "Decrypted credentials - Username: %s", username);
+  // Check against the configured websocket credentials
+  bool bValid = validate_ws_user(username, password);
+  if (bValid) {
+    strncpy(pctx->user.username, username, sizeof(pctx->user.username) - 1);
+    pctx->user.username[sizeof(pctx->user.username) - 1] = '\0';
+    pctx->user.privlevel                                  = 15;
+    ESP_LOGI(TAG, "Credentials valid for user '%s'", pctx->user.username);
+  }
+  else {
+    ESP_LOGE(TAG, "Credentials: Invalid");
+  }
 
-  return VSCP_ERROR_SUCCESS;
+  secure_zero(encbuf, sizeof(encbuf));
+  return bValid ? VSCP_ERROR_SUCCESS : VSCP_ERROR_INVALID_PERMISSION;
 }
 
 ///////////////////////////////////////////////////////////////////////////////

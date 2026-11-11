@@ -1063,6 +1063,46 @@ getMilliSeconds(void)
   return (esp_timer_get_time() / 1000);
 };
 
+///////////////////////////////////////////////////////////////////////////////
+// secure_str_equal
+//
+
+bool
+secure_str_equal(const char *stored, const char *supplied, size_t maxlen)
+{
+  if ((NULL == stored) || (NULL == supplied) || (0 == maxlen)) {
+    return false;
+  }
+
+  size_t len_stored   = strnlen(stored, maxlen);
+  size_t len_supplied = strnlen(supplied, maxlen);
+
+  // Strings that fill maxlen without a terminator never match
+  volatile uint8_t diff = (uint8_t) ((len_stored != len_supplied) | (len_stored >= maxlen) | (len_supplied >= maxlen));
+
+  // Always scan maxlen bytes so the time taken does not depend on where the strings differ
+  for (size_t i = 0; i < maxlen; i++) {
+    uint8_t a = (i < len_stored) ? (uint8_t) stored[i] : 0;
+    uint8_t b = (i < len_supplied) ? (uint8_t) supplied[i] : 0;
+    diff |= (uint8_t) (a ^ b);
+  }
+
+  return (0 == diff);
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// secure_zero
+//
+
+void
+secure_zero(void *buf, size_t len)
+{
+  volatile uint8_t *p = (volatile uint8_t *) buf;
+  while (len--) {
+    *p++ = 0;
+  }
+}
+
 /**
  * @brief Validate user credentials against stored values
  *
@@ -1114,11 +1154,35 @@ validate_user(const char *user, const char *pw)
       return false;
   }
 
-  if (0 == strcmp(username, user) && 0 == strcmp(password, pw)) {
-    return true;
+  // Evaluate both comparisons so timing does not reveal which one failed
+  bool user_ok = secure_str_equal(username, user, sizeof(username));
+  bool pw_ok   = secure_str_equal(password, pw, sizeof(password));
+  secure_zero(password, sizeof(password));
+
+  return user_ok && pw_ok;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// validate_ws_user
+//
+
+bool
+validate_ws_user(const char *user, const char *pw)
+{
+  if ((NULL == user) || (NULL == pw)) {
+    return false;
   }
 
-  return false;
+  // Reject empty configured credentials so an unset user/password never matches
+  if (('\0' == g_persistent.websockUser[0]) || ('\0' == g_persistent.websockPw[0])) {
+    ESP_LOGE(TAG, "Websocket credentials not configured");
+    return false;
+  }
+
+  bool user_ok = secure_str_equal(g_persistent.websockUser, user, sizeof(g_persistent.websockUser));
+  bool pw_ok   = secure_str_equal(g_persistent.websockPw, pw, sizeof(g_persistent.websockPw));
+
+  return user_ok && pw_ok;
 }
 
 /**
