@@ -136,6 +136,7 @@ typedef struct _vscp_ws_connection_context {
   uint8_t encryption;     // Encryption type used for the connection. 0 = no encryption, 1 = AES-128, etc.
   vscpEventFilter filter; // Filter/mask for received VSCP events for this connection
   bool bAuthenticated;    // Whether the client is authenticated. True if authenticated
+  uint8_t authFailures;   // Number of failed authentication attempts on this connection
   ws_user_t user;         // User information for athenticated user
   vscp_statistics_t stats; // Statistics for the connection
   vscp_status_t status;    // Status information for the connection

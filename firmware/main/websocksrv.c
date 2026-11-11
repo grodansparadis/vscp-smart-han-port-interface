@@ -311,6 +311,39 @@ send_event(void *arg)
     return;
   }
 
+  // ws2: only authenticated clients with an open channel get events that pass their filter
+  if (VSCP_WS2_PROTOCOL == pctx->protocol) {
+    if (!vscp_ws2_should_send_event(pctx, &resp_arg->ex)) {
+      free(resp_arg);
+      return;
+    }
+
+    char *json = vscp_ws2_format_event(&resp_arg->ex);
+    if (NULL == json) {
+      ESP_LOGE(TAG, "send_event: failed to format ws2 event for fd=%d", fd);
+      free(resp_arg);
+      return;
+    }
+
+    httpd_ws_frame_t ws2_pkt = { 0 };
+    ws2_pkt.type             = HTTPD_WS_TYPE_TEXT;
+    ws2_pkt.payload          = (uint8_t *) json;
+    ws2_pkt.len              = strlen(json);
+
+    esp_err_t ret = httpd_ws_send_frame_async(hd, fd, &ws2_pkt);
+    if (ret != ESP_OK) {
+      ESP_LOGE(TAG, "send_event: ws2 async send failed fd=%d err=%d", fd, ret);
+    }
+    else {
+      pctx->stats.cntTransmitFrames++;
+      pctx->stats.cntTransmitData += resp_arg->ex.sizeData;
+    }
+
+    free(json);
+    free(resp_arg);
+    return;
+  }
+
   ESP_LOGI(TAG,
            "send_event: Sending to fd=%d protocol=%d binary=%d enc=%d",
            fd,
@@ -946,84 +979,114 @@ ws1_get_handler(httpd_req_t *req)
 // ws2_get_handler
 //
 // WebSocket protocol endpoint (/ws2)
-// Expects text frames on format: C;COMMAND;optional-data
+// JSON based protocol, see vscp-ws2.h
 //
 
 static esp_err_t
 ws2_get_handler(httpd_req_t *req)
 {
-  ESP_LOGI(TAG, "WS2 handler called with method=%d", req->method);
+  esp_err_t rv = ESP_OK;
 
   if (req->method == HTTP_GET) {
     ESP_LOGI(TAG, "WS2 handshake complete");
+
+    // Allocate a session context for this connection and send the AUTH0 challenge
+    if (NULL == req->sess_ctx) {
+      req->sess_ctx = calloc(1, sizeof(vscp_ws_connection_context_t));
+      if (NULL == req->sess_ctx) {
+        ESP_LOGE(TAG, "WS2 failed to allocate session context");
+        return ESP_ERR_NO_MEM;
+      }
+
+      if (VSCP_ERROR_SUCCESS != vscp_ws2_init((vscp_ws_connection_context_t *) req->sess_ctx, (void *) req)) {
+        ESP_LOGE(TAG, "WS2 failed to initialize session context");
+        free(req->sess_ctx);
+        req->sess_ctx = NULL;
+        return ESP_FAIL;
+      }
+    }
+
     return ESP_OK;
   }
 
-  httpd_ws_frame_t rx = { 0 };
-  rx.type             = HTTPD_WS_TYPE_TEXT;
+  vscp_ws_connection_context_t *pctx = (vscp_ws_connection_context_t *) req->sess_ctx;
+  if ((NULL == pctx) || (VSCP_WS2_PROTOCOL != pctx->protocol)) {
+    ESP_LOGE(TAG, "WS2 frame without a ws2 session context");
+    return ESP_FAIL;
+  }
 
-  esp_err_t rv = httpd_ws_recv_frame(req, &rx, 0);
+  // The request object is only valid while this frame is handled
+  pctx->pdata = (void *) req;
+
+  httpd_ws_frame_t ws_pkt = { 0 };
+
+  // Get the frame length first
+  rv = httpd_ws_recv_frame(req, &ws_pkt, 0);
   if (ESP_OK != rv) {
     ESP_LOGE(TAG, "WS2 failed to get frame len rv=%d", rv);
     return rv;
   }
 
-  if (0 == rx.len) {
-    return ESP_OK;
-  }
+  if (HTTPD_WS_TYPE_TEXT == ws_pkt.type) {
 
-  uint8_t *payload = calloc(1, rx.len + 1);
-  if (NULL == payload) {
-    return ESP_ERR_NO_MEM;
-  }
-
-  rx.payload = payload;
-  rv         = httpd_ws_recv_frame(req, &rx, rx.len);
-  if (ESP_OK != rv) {
-    ESP_LOGE(TAG, "WS2 failed to receive frame rv=%d", rv);
-    free(payload);
-    return rv;
-  }
-
-  ESP_LOGI(TAG, "WS2 RX: %s", (char *) payload);
-
-  httpd_ws_frame_t tx = { 0 };
-  tx.type             = HTTPD_WS_TYPE_TEXT;
-
-  if ((rx.len >= 3) && (payload[0] == 'C') && (payload[1] == ';')) {
-    char *cmd  = (char *) payload + 2;
-    char *data = strchr(cmd, ';');
-    if (NULL != data) {
-      *data = '\0';
-      data++;
-    }
-    else {
-      data = "";
+    if (0 == ws_pkt.len) {
+      return ESP_OK;
     }
 
-    ESP_LOGD(TAG, "WS2 command=%s data=%s", cmd, data);
+    // Refuse over-long frames before allocating memory for them. Returning an
+    // error closes the connection.
+    if (ws_pkt.len > VSCP_WS2_MAX_PACKET_SIZE) {
+      ESP_LOGE(TAG, "WS2 frame too large len=%u, closing connection", (unsigned) ws_pkt.len);
+      return ESP_FAIL;
+    }
 
-    size_t reply_len = strlen(cmd) + 3;
-    char *reply      = calloc(1, reply_len + 1);
-    if (NULL == reply) {
-      free(payload);
+    uint8_t *payload = calloc(1, ws_pkt.len + 1);
+    if (NULL == payload) {
       return ESP_ERR_NO_MEM;
     }
 
-    snprintf(reply, reply_len + 1, "+;%s", cmd);
-    tx.payload = (uint8_t *) reply;
-    tx.len     = strlen(reply);
-    rv         = httpd_ws_send_frame(req, &tx);
-    free(reply);
+    ws_pkt.payload = payload;
+    rv             = httpd_ws_recv_frame(req, &ws_pkt, ws_pkt.len);
+    if (ESP_OK != rv) {
+      ESP_LOGE(TAG, "WS2 failed to receive frame rv=%d", rv);
+      free(payload);
+      return rv;
+    }
+
+    int vrv = vscp_ws2_handle_request(pctx, (const char *) payload, ws_pkt.len);
+    secure_zero(payload, ws_pkt.len); // May hold AUTH credentials
+    free(payload);
+
+    if (VSCP_ERROR_INVALID_PERMISSION == vrv) {
+      ESP_LOGW(TAG, "WS2 too many failed logins, closing connection");
+      return ESP_FAIL;
+    }
   }
-  else {
-    const char *errtxt = "-;ERR;Invalid frame";
-    tx.payload         = (uint8_t *) errtxt;
-    tx.len             = strlen(errtxt);
-    rv                 = httpd_ws_send_frame(req, &tx);
+  else if (HTTPD_WS_TYPE_BINARY == ws_pkt.type) {
+    // ws2 is text only. Refuse binary frames without reading them.
+    ESP_LOGE(TAG, "WS2 binary frames are not supported, closing connection");
+    return ESP_FAIL;
+  }
+  else if (HTTPD_WS_TYPE_PING == ws_pkt.type) {
+    httpd_ws_frame_t pong = { 0 };
+    pong.type             = HTTPD_WS_TYPE_PONG;
+    rv                    = httpd_ws_send_frame(req, &pong);
+    if (ESP_OK != rv) {
+      ESP_LOGE(TAG, "WS2 failed to send PONG frame rv=%d", rv);
+    }
+  }
+  else if (HTTPD_WS_TYPE_PONG == ws_pkt.type) {
+    return wss_keep_alive_client_is_active(httpd_get_global_user_ctx(req->handle), httpd_req_to_sockfd(req));
+  }
+  else if (HTTPD_WS_TYPE_CLOSE == ws_pkt.type) {
+    httpd_ws_frame_t close_frame = { 0 };
+    close_frame.type             = HTTPD_WS_TYPE_CLOSE;
+    rv                           = httpd_ws_send_frame(req, &close_frame);
+    if (ESP_OK != rv) {
+      ESP_LOGE(TAG, "WS2 failed to send CLOSE frame rv=%d", rv);
+    }
   }
 
-  free(payload);
   return rv;
 }
 

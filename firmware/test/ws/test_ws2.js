@@ -10,7 +10,7 @@ WebSocket = require('ws');
 const crypto = require('crypto');
 
 const defaultUrl = 'ws://localhost:8884/ws2';
-const DEFAULT_USERNAME = 'admin';
+const DEFAULT_USERNAME = 'vscp';
 const DEFAULT_PASSWORD = 'secret';
 const DEFAULT_KEY_HEX = 'A4A86F7D7E119BA3F0CD06881E371B98';
 
@@ -86,7 +86,7 @@ function getAuthConfig() {
 
   if (cli.help) {
     console.log('Usage: node test_ws2.js [url] [--url <url>] [--user <username>] [--password <password>] [--key <aes128-hex>]');
-    console.log('Example: node test_ws2.js --url ws://192.168.1.100:8884/ws2 --user admin --password secret --key A4A86F7D7E119BA3F0CD06881E371B98');
+    console.log('Example: node test_ws2.js --url ws://192.168.1.100:8884/ws2 --user vscp --password secret --key A4A86F7D7E119BA3F0CD06881E371B98');
     console.log('Env: WS2_URL, WS2_USERNAME, WS2_PASSWORD, WS2_KEY (fallback: VSCP_USERNAME, VSCP_PASSWORD, VSCP_KEY16)');
     process.exit(0);
   }
@@ -119,7 +119,7 @@ function encryptAuthCredentials(username, password, sidHex, keyHex) {
 
   const iv = Buffer.from(sidHex, 'hex');
   const key = Buffer.from(keyHex, 'hex');
-  const plainCredentials = Buffer.from(`${username};${password}`, 'utf8');
+  const plainCredentials = Buffer.from(`${username}:${password}`, 'utf8');
 
   const cipher = crypto.createCipheriv('aes-128-cbc', key, iv);
   const encrypted = Buffer.concat([cipher.update(plainCredentials), cipher.final()]);
@@ -165,8 +165,19 @@ function printWs2Message(reply, rawMessage) {
     return;
   }
 
-  const msgType = reply.type || 'unknown';
-  console.log(`\n* * * WS2 message (${msgType})`);
+  const msgType = String(reply.type || 'unknown').toLowerCase();
+  console.log(`\n* * * WS2 message (${reply.type || 'unknown'})`);
+
+  if (msgType === '+' || msgType === '-') {
+    console.log(`Command   : ${reply.command || '(none)'}`);
+    if (msgType === '-') {
+      console.log(`Error     : ${reply.errcode ?? '?'} ${reply.errstr ?? ''}`);
+    }
+    if (reply.args !== undefined && reply.args !== null) {
+      console.log(`Args      : ${JSON.stringify(reply.args)}`);
+    }
+    return;
+  }
 
   if (msgType === 'cmd') {
     console.log(`Command   : ${reply.command || '(none)'}`);
@@ -185,7 +196,7 @@ function printWs2Message(reply, rawMessage) {
     return;
   }
 
-  if (msgType === 'event') {
+  if (msgType === 'event' || msgType === 'e') {
     const event = reply.event || {};
     console.log(`Class/Type: ${event.vscpClass ?? event.class ?? '?'}/${event.vscpType ?? event.type ?? '?'}`);
     console.log(`Head/ObId : ${event.vscpHead ?? event.head ?? '?'}/${event.vscpObId ?? event.obid ?? '?'}`);
@@ -220,7 +231,7 @@ function commandMatches(reply, expectedCommand) {
     return true;
   }
 
-  if (!reply || reply.type !== 'cmd') {
+  if (!reply || !['+', '-', 'cmd'].includes(String(reply.type).toLowerCase())) {
     return false;
   }
 
@@ -473,7 +484,10 @@ ws.on('message', function incoming(data) {
       }
 
       if (commandMatches(reply, pendingRequest.expected)) {
-        if (reply.code !== undefined && Number(reply.code) !== 0) {
+        if (reply.type === '-') {
+          pendingRequest.reject(new Error(`Command failed (${reply.command}): errcode=${reply.errcode} ${reply.errstr ?? ''}`.trim()));
+        }
+        else if (reply.code !== undefined && Number(reply.code) !== 0) {
           pendingRequest.reject(new Error(`Command failed (${reply.command}): code=${reply.code} message=${reply.message ?? ''}`.trim()));
         }
         else {

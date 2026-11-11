@@ -20,7 +20,7 @@ import json
 import re
 
 DEFAULT_URL = 'ws://localhost:8884/ws2'
-DEFAULT_USERNAME = 'admin'
+DEFAULT_USERNAME = 'vscp'
 DEFAULT_PASSWORD = 'secret'
 DEFAULT_KEY_HEX = 'A4A86F7D7E119BA3F0CD06881E371B98'
 
@@ -57,7 +57,7 @@ def encrypt_auth_credentials(username: str, password: str, sid_hex: str, key_hex
 
     iv = bytes.fromhex(sid_hex)
     key = bytes.fromhex(key_hex)
-    plaintext = _pkcs7_pad(f"{username};{password}".encode('utf-8'))
+    plaintext = _pkcs7_pad(f"{username}:{password}".encode('utf-8'))
 
     try:
         from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
@@ -96,7 +96,7 @@ def get_cli_config():
 
     if '--help' in args or '-h' in args:
         print('Usage: python test_ws2.py [url] [--url <url>] [--user <username>] [--password <password>] [--key <aes128-hex>]')
-        print('Example: python test_ws2.py --url ws://192.168.1.50:8884/ws2 --user admin --password secret --key A4A86F7D7E119BA3F0CD06881E371B98')
+        print('Example: python test_ws2.py --url ws://192.168.1.50:8884/ws2 --user vscp --password secret --key A4A86F7D7E119BA3F0CD06881E371B98')
         print('Env: WS2_URL, WS2_USERNAME, WS2_PASSWORD, WS2_KEY (fallback: VSCP_USERNAME, VSCP_PASSWORD, VSCP_KEY16)')
         exit(0)
 
