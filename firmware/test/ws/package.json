@@ -20,6 +20,6 @@
     "test:ws2:lab:hs": "WS_HOST=192.168.1.100 WS_TEST_MODE=handshake node test_ws2.js"
   },
   "dependencies": {
-    "ws": "^8.18.0"
+    "ws": "^8.21.0"
   }
 }
