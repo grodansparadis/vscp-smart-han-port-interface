@@ -1,5 +1,5 @@
 {
-  "name": "vscp-din-wireless-esp32-can-z102-firmware-tools",
+  "name": "vscp-smart-han-port-interface-firmware-tools",
   "private": true,
   "version": "1.0.0",
   "description": "Utility scripts for firmware testing",
@@ -20,6 +20,6 @@
     "test:ws2:lab:hs": "WS_HOST=192.168.1.100 WS_TEST_MODE=handshake node test_ws2.js"
   },
   "dependencies": {
-    "ws": "^8.18.0"
+    "ws": "^8.22.2"
   }
 }
